@@ -43,14 +43,6 @@ data class SoundCloudUiState(
     val isRefreshing: Boolean = false,
 )
 
-private data class SoundCloudNavFrame(
-    val section: SoundCloudSection,
-    val results: List<SoundCloudSearchHit>,
-    val browsingPlaylistTitle: String?,
-    val browsingPlaylistUrl: String?,
-    val query: String,
-)
-
 @HiltViewModel
 class SoundCloudViewModel @Inject constructor(
     private val client: SoundCloudClient,
@@ -58,12 +50,20 @@ class SoundCloudViewModel @Inject constructor(
     private val downloader: SoundCloudDownloadService,
 ) : ViewModel() {
 
+    private data class NavFrame(
+        val section: SoundCloudSection,
+        val results: List<SoundCloudSearchHit>,
+        val browsingPlaylistTitle: String?,
+        val browsingPlaylistUrl: String?,
+        val query: String,
+    )
+
     private val _uiState = MutableStateFlow(SoundCloudUiState())
     val uiState: StateFlow<SoundCloudUiState> = _uiState.asStateFlow()
 
     private var searchJob: Job? = null
     private var loadJob: Job? = null
-    private val navStack = ArrayDeque<SoundCloudNavFrame>()
+    private val navStack = ArrayDeque<NavFrame>()
 
     init {
         viewModelScope.launch {
@@ -244,7 +244,7 @@ class SoundCloudViewModel @Inject constructor(
     private fun pushNavFrame() {
         val state = _uiState.value
         navStack.addLast(
-            SoundCloudNavFrame(
+            NavFrame(
                 section = state.section,
                 results = state.results,
                 browsingPlaylistTitle = state.browsingPlaylistTitle,
@@ -268,7 +268,7 @@ class SoundCloudViewModel @Inject constructor(
      * Resolves playable tracks from the current results list for shuffle/queue playback.
      * Skips playlists and tracks that fail to resolve (e.g. DRM).
      */
-    suspend fun resolveTracksForPlayback(limit: Int = SHUFFLE_TRACK_LIMIT): List<Song> {
+    suspend fun resolveTracksForPlayback(limit: Int = 30): List<Song> {
         val tracks = _uiState.value.results
             .asSequence()
             .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
@@ -280,7 +280,7 @@ class SoundCloudViewModel @Inject constructor(
         setBusy()
         return withContext(Dispatchers.IO) {
             ensureClient()
-            val gate = Semaphore(RESOLVE_PARALLELISM)
+            val gate = Semaphore(4)
             coroutineScope {
                 tracks.map { hit ->
                     async {
@@ -496,7 +496,5 @@ class SoundCloudViewModel @Inject constructor(
 
     companion object {
         private const val SEARCH_DEBOUNCE_MS = 350L
-        private const val SHUFFLE_TRACK_LIMIT = 30
-        private const val RESOLVE_PARALLELISM = 4
     }
 }
