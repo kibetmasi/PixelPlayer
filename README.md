@@ -37,8 +37,6 @@
 
 > Tip: each new release can update the app **in place** (same signing key). You usually don’t need to uninstall first — that keeps login and settings.
 
-Optional: use [Obtainium](https://github.com/ImranR98/Obtainium) pointed at this repo to get update notifications.
-
 ---
 
 ## SoundCloud setup
@@ -60,31 +58,16 @@ Do this on a computer (Chrome / Edge / Firefox):
 3. Open the **Network** tab.
 4. In the filter box, type: `client_id`
 5. Click around or pause/play so new requests appear.
-6. Click a request whose URL looks like:
-   `https://api-v2.soundcloud.com/…?client_id=xxxxxxxx…`
-7. Copy the long `client_id` value (letters and numbers after `client_id=`).
+6. Click a request to SoundCloud’s API — for example:
+   `https://api-v2.soundcloud.com/me?client_id=Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo`
+7. Copy the long value after `client_id=` (in the example above: `Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo`).  
+   Yours will look similar but may be different, and it can change over time.
 
-**Screenshots help here** — if you send them, drop them into `assets/` as:
-
-| File | What to show |
-|------|----------------|
-| `assets/soundcloud-devtools-network.jpg` | Network tab with `client_id` in the filter |
-| `assets/soundcloud-devtools-request.jpg` | A request URL with `client_id=…` highlighted |
-| `assets/soundcloud-app-settings.jpg` | PixelPlayer Experimental screen with the client_id field |
-
-*(Those images are optional placeholders until you add them.)*
-
-<!-- Uncomment when screenshots are added:
 <p align="center">
-  <img src="assets/soundcloud-devtools-network.jpg" alt="Find client_id in Network tab" width="480"/>
+  <img src="assets/soundcloud-devtools-request.png" alt="Chrome DevTools Network tab showing api-v2.soundcloud.com/me?client_id=…" width="720"/>
 </p>
-<p align="center">
-  <img src="assets/soundcloud-devtools-request.jpg" alt="Copy client_id from request URL" width="480"/>
-</p>
-<p align="center">
-  <img src="assets/soundcloud-app-settings.jpg" alt="Paste client_id in the app" width="240"/>
-</p>
--->
+
+<p align="center"><em>Network → filter <code>client_id</code> → open a request → copy <code>client_id</code> from the Request URL</em></p>
 
 ### 3. Paste it into PixelPlayer
 
