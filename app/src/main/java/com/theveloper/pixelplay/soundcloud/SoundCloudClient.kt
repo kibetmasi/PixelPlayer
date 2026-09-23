@@ -69,6 +69,10 @@ class SoundCloudClient @Inject constructor(
     fun loadFeed(limit: Int = 40): List<SoundCloudSearchHit> = sessionApi.loadFeed(limit)
 
     @Throws(Exception::class)
+    fun loadRecentlyPlayed(limit: Int = 20): List<SoundCloudSearchHit> =
+        sessionApi.loadRecentlyPlayed(limit)
+
+    @Throws(Exception::class)
     fun loadMyLikes(limit: Int = 40): List<SoundCloudSearchHit> = sessionApi.loadMyLikes(limit)
 
     @Throws(Exception::class)
@@ -76,6 +80,10 @@ class SoundCloudClient @Inject constructor(
 
     @Throws(Exception::class)
     fun loadMyPlaylists(limit: Int = 40): List<SoundCloudSearchHit> = sessionApi.loadMyPlaylists(limit)
+
+    @Throws(Exception::class)
+    fun setTrackLiked(trackUrl: String, liked: Boolean) =
+        sessionApi.setTrackLiked(trackUrl, liked)
 
     @Throws(Exception::class)
     fun loadDiscover(limit: Int = 30): List<SoundCloudSearchHit> {

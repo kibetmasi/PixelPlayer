@@ -2,6 +2,7 @@ package com.theveloper.pixelplay.soundcloud
 
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -65,6 +66,15 @@ class SoundCloudSessionApi @Inject constructor() {
     }
 
     @Throws(Exception::class)
+    fun loadRecentlyPlayed(limit: Int = 20): List<SoundCloudSearchHit> {
+        return getFirstCollection(
+            limit,
+            "https://api-v2.soundcloud.com/me/play-history/tracks?limit=${limit * 2}&linked_partitioning=1",
+            "https://api-v2.soundcloud.com/me/play-history?limit=${limit * 2}&linked_partitioning=1",
+        )
+    }
+
+    @Throws(Exception::class)
     fun loadMyLikes(limit: Int = 40): List<SoundCloudSearchHit> {
         val userId = requireUserId()
         return getFirstCollection(
@@ -91,6 +101,22 @@ class SoundCloudSessionApi @Inject constructor() {
             limit,
             "https://api-v2.soundcloud.com/users/$userId/playlists_without_albums?limit=${limit * 2}&linked_partitioning=1",
             "https://api-v2.soundcloud.com/users/$userId/playlists?limit=${limit * 2}&linked_partitioning=1",
+        )
+    }
+
+    @Throws(Exception::class)
+    fun setTrackLiked(trackUrl: String, liked: Boolean) {
+        val encoded = java.net.URLEncoder.encode(trackUrl.trim(), Charsets.UTF_8.name())
+        val track = getJson(
+            "https://api-v2.soundcloud.com/resolve?url=$encoded",
+            requireAuth = true,
+        )
+        val trackId = track.optLong("id", -1L)
+        require(trackId > 0) { "SoundCloud could not resolve this track for liking" }
+        val userId = requireUserId()
+        mutate(
+            url = "https://api-v2.soundcloud.com/users/$userId/track_likes/$trackId",
+            method = if (liked) "PUT" else "DELETE",
         )
     }
 
@@ -280,6 +306,33 @@ class SoundCloudSessionApi @Inject constructor() {
                 throw IllegalStateException("SoundCloud API ${response.code}: ${body.take(180)}")
             }
             return body
+        }
+    }
+
+    private fun mutate(url: String, method: String) {
+        val token = oauthToken.get()
+        require(token.isNotBlank()) { "Sign in to SoundCloud to like tracks" }
+        val id = clientId.get()
+        val finalUrl = if (id.isNotBlank() && !url.contains("client_id=")) {
+            "$url?client_id=$id"
+        } else {
+            url
+        }
+        val builder = Request.Builder()
+            .url(finalUrl)
+            .method(method, ByteArray(0).toRequestBody(null))
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/json, text/javascript, */*; q=0.01")
+            .header("Authorization", "OAuth $token")
+            .header("Origin", "https://soundcloud.com")
+            .header("Referer", "https://soundcloud.com/")
+        cookieHeader.get().takeIf { it.isNotBlank() }?.let { builder.header("Cookie", it) }
+        http.newCall(builder.build()).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException(
+                    "SoundCloud like request failed (${response.code}): ${response.body.string().take(180)}",
+                )
+            }
         }
     }
 

@@ -12,6 +12,12 @@ data class SoundCloudSearchHit(
     enum class Kind { TRACK, PLAYLIST }
 }
 
+data class SoundCloudFeedShelf(
+    val id: String,
+    val title: String,
+    val items: List<SoundCloudSearchHit>,
+)
+
 data class SoundCloudResolvedTrack(
     val url: String,
     val title: String,

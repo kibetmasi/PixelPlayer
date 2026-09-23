@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1-soundcloud] - 2026-09-23
+
+### Added
+- **SoundCloud:** Personalized feed shelves for likes, recent plays, mixes, curated tracks, playlists, and followed creators.
+- **SoundCloud:** Automatic queue playback so the next playable track starts when the current track ends.
+- **SoundCloud:** End-of-list loading that requests more results while scrolling.
+- **SoundCloud:** Like and unlike controls on track tiles and list rows.
+
+### Changed
+- **SoundCloud:** Reused the Library accent header, pill navigation, action row, and tiles/list controls across every SoundCloud page.
+- **SoundCloud:** Compact screens use feed category pills while foldables and wide screens show the full multi-section feed.
+
+### Fixed
+- **SoundCloud:** Playlist Back now restores the previous SoundCloud tab and feed state.
+- **SoundCloud:** Downloaded tracks retain artwork, with metadata backfill for existing downloads.
+- **SoundCloud:** Tile labels are no longer clipped by the card’s rounded bottom corners.
+
 ## [0.8.0-soundcloud] - 2026-09-23
 
 ### Added

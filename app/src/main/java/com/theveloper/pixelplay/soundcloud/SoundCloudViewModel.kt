@@ -30,6 +30,7 @@ data class SoundCloudUiState(
     val displayName: String = "",
     val isLoading: Boolean = false,
     val results: List<SoundCloudSearchHit> = emptyList(),
+    val feedShelves: List<SoundCloudFeedShelf> = emptyList(),
     val downloads: List<Song> = emptyList(),
     val statusMessage: String? = null,
     val errorMessage: String? = null,
@@ -41,6 +42,10 @@ data class SoundCloudUiState(
     /** True while a playlist (or nested) browse can be popped with system Back. */
     val canNavigateBack: Boolean = false,
     val isRefreshing: Boolean = false,
+    val isLoadingMore: Boolean = false,
+    val endReached: Boolean = false,
+    val likedTrackUrls: Set<String> = emptySet(),
+    val likingUrl: String? = null,
 )
 
 @HiltViewModel
@@ -63,6 +68,8 @@ class SoundCloudViewModel @Inject constructor(
 
     private var searchJob: Job? = null
     private var loadJob: Job? = null
+    private var artworkJob: Job? = null
+    private val artworkAttempts = mutableSetOf<String>()
     private val navStack = ArrayDeque<NavFrame>()
 
     init {
@@ -143,10 +150,13 @@ class SoundCloudViewModel @Inject constructor(
                 section = section,
                 browsingPlaylistTitle = null,
                 browsingPlaylistUrl = null,
+                feedShelves = if (section == SoundCloudSection.FEED) it.feedShelves else emptyList(),
                 errorMessage = null,
                 statusMessage = null,
                 canNavigateBack = false,
                 isRefreshing = false,
+                isLoadingMore = false,
+                endReached = false,
             )
         }
         when (section) {
@@ -196,12 +206,7 @@ class SoundCloudViewModel @Inject constructor(
             return
         }
         when (state.section) {
-            SoundCloudSection.FEED -> runLoad("Refreshing feed…", clearResults = false, refreshing = true) {
-                if (!client.hasSession) {
-                    throw IllegalStateException("Sign in to SoundCloud to see your personal feed")
-                }
-                client.loadFeed()
-            }
+            SoundCloudSection.FEED -> loadFeed(refreshing = true)
             SoundCloudSection.DISCOVER ->
                 runLoad("Refreshing discover…", clearResults = false, refreshing = true) { client.loadDiscover() }
             SoundCloudSection.SEARCH -> {
@@ -236,6 +241,8 @@ class SoundCloudViewModel @Inject constructor(
                 errorMessage = null,
                 statusMessage = null,
                 canNavigateBack = navStack.isNotEmpty(),
+                isLoadingMore = false,
+                endReached = false,
             )
         }
         return true
@@ -262,6 +269,52 @@ class SoundCloudViewModel @Inject constructor(
     suspend fun resolveToSong(hit: SoundCloudSearchHit) = withContext(Dispatchers.IO) {
         ensureClient()
         client.toSong(client.resolveTrack(hit.url))
+    }
+
+    /**
+     * Builds an ordered queue around the selected track so normal player completion advances
+     * to the next playable SoundCloud track. Unplayable/DRM entries are skipped.
+     */
+    suspend fun resolveQueueForPlayback(
+        startHit: SoundCloudSearchHit,
+        queueHits: List<SoundCloudSearchHit>,
+        limit: Int = 40,
+    ): Pair<List<Song>, Song> {
+        val candidates = (listOf(startHit) + queueHits)
+            .asSequence()
+            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
+            .distinctBy { it.url }
+            .take(limit)
+            .toList()
+        setBusy(startHit.url)
+        val resolved = withContext(Dispatchers.IO) {
+            ensureClient()
+            val gate = Semaphore(4)
+            coroutineScope {
+                candidates.map { hit ->
+                    async {
+                        gate.withPermit {
+                            runCatching { hit to client.toSong(client.resolveTrack(hit.url)) }
+                                .onFailure { Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url) }
+                                .getOrNull()
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+        }
+        val startSong = resolved.firstOrNull { it.first.url == startHit.url }?.second
+            ?: throw IllegalStateException("This SoundCloud track has no playable stream")
+        val songsByUrl = resolved.associate { it.first.url to it.second }
+        val orderedSongs = queueHits
+            .asSequence()
+            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
+            .mapNotNull { songsByUrl[it.url] }
+            .distinctBy { it.id }
+            .toMutableList()
+            .apply {
+                if (none { it.id == startSong.id }) add(0, startSong)
+            }
+        return orderedSongs to startSong
     }
 
     /**
@@ -331,6 +384,42 @@ class SoundCloudViewModel @Inject constructor(
         }
     }
 
+    fun toggleLike(hit: SoundCloudSearchHit) {
+        if (hit.kind != SoundCloudSearchHit.Kind.TRACK || _uiState.value.likingUrl != null) return
+        if (!_uiState.value.isSignedIn) {
+            _uiState.update { it.copy(errorMessage = "Sign in to SoundCloud to like tracks") }
+            return
+        }
+        val shouldLike = hit.url !in _uiState.value.likedTrackUrls
+        viewModelScope.launch {
+            _uiState.update { it.copy(likingUrl = hit.url, errorMessage = null) }
+            try {
+                withContext(Dispatchers.IO) { client.setTrackLiked(hit.url, shouldLike) }
+                _uiState.update { state ->
+                    val liked = if (shouldLike) {
+                        state.likedTrackUrls + hit.url
+                    } else {
+                        state.likedTrackUrls - hit.url
+                    }
+                    state.copy(
+                        likedTrackUrls = liked,
+                        likingUrl = null,
+                        results = if (!shouldLike && state.section == SoundCloudSection.LIKES) {
+                            state.results.filterNot { it.url == hit.url }
+                        } else {
+                            state.results
+                        },
+                    )
+                }
+            } catch (t: Throwable) {
+                Timber.w(t, "SoundCloud like toggle failed")
+                _uiState.update {
+                    it.copy(likingUrl = null, errorMessage = t.message ?: t::class.java.simpleName)
+                }
+            }
+        }
+    }
+
     fun setBusy(key: String? = null) {
         _uiState.update {
             it.copy(isLoading = true, statusMessage = null, errorMessage = null, resolvingKey = key)
@@ -353,7 +442,47 @@ class SoundCloudViewModel @Inject constructor(
                 statusMessage = null,
             )
         }
+        hydrateMissingDownloadArtwork(songs)
     }
+
+    private fun hydrateMissingDownloadArtwork(songs: List<Song>) {
+        if (_uiState.value.clientId.isBlank()) return
+        val missing = songs.filter {
+            it.albumArtUriString.isNullOrBlank() && artworkAttempts.add(it.id)
+        }
+        if (missing.isEmpty()) return
+        artworkJob?.cancel()
+        artworkJob = viewModelScope.launch(Dispatchers.IO) {
+            ensureClient()
+            val hydrated = missing.mapNotNull { song ->
+                val query = "${song.artist} ${song.title}".trim()
+                val candidates = runCatching { client.search(query, 5) }.getOrDefault(emptyList())
+                val normalizedTitle = song.title.normalizedForArtworkMatch()
+                val match = candidates.firstOrNull {
+                    it.kind == SoundCloudSearchHit.Kind.TRACK &&
+                        it.title.normalizedForArtworkMatch() == normalizedTitle &&
+                        !it.thumbnailUrl.isNullOrBlank()
+                } ?: candidates.firstOrNull {
+                    it.kind == SoundCloudSearchHit.Kind.TRACK && !it.thumbnailUrl.isNullOrBlank()
+                }
+                val artwork = match?.thumbnailUrl ?: return@mapNotNull null
+                downloader.rememberArtwork(song, artwork)
+                song.id to artwork
+            }.toMap()
+            if (hydrated.isNotEmpty()) {
+                _uiState.update { state ->
+                    state.copy(
+                        downloads = state.downloads.map { song ->
+                            hydrated[song.id]?.let { song.copy(albumArtUriString = it) } ?: song
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    private fun String.normalizedForArtworkMatch(): String =
+        lowercase().replace(Regex("[^a-z0-9]+"), "")
 
     private fun scheduleSearch(rawQuery: String, refreshing: Boolean = false) {
         searchJob?.cancel()
@@ -394,48 +523,153 @@ class SoundCloudViewModel @Inject constructor(
         }
     }
 
-    private fun loadFeed() = runLoad("Loading feed…") {
+    /** Requests a larger result window when the current list reaches its end. */
+    fun loadMore() {
+        val state = _uiState.value
+        if (state.isLoading || state.isRefreshing || state.isLoadingMore || state.endReached) return
+        val nextLimit = (state.results.size + PAGE_SIZE).coerceAtMost(MAX_RESULTS)
+        if (nextLimit <= state.results.size) {
+            _uiState.update { it.copy(endReached = true) }
+            return
+        }
+        val playlistUrl = state.browsingPlaylistUrl
+        if (!playlistUrl.isNullOrBlank()) {
+            runLoad("Loading more…", clearResults = false, loadingMore = true) {
+                client.loadPlaylistTracks(playlistUrl, nextLimit)
+            }
+            return
+        }
+        when (state.section) {
+            SoundCloudSection.FEED -> loadFeed(limit = nextLimit, loadingMore = true)
+            SoundCloudSection.DISCOVER ->
+                runLoad("Loading more…", clearResults = false, loadingMore = true) {
+                    client.loadDiscover(nextLimit)
+                }
+            SoundCloudSection.SEARCH -> {
+                val query = state.query.trim()
+                if (query.length >= 2) {
+                    runLoad("Loading more…", clearResults = false, loadingMore = true) {
+                        client.search(query, nextLimit)
+                    }
+                }
+            }
+            SoundCloudSection.LIKES -> loadLikes(limit = nextLimit, loadingMore = true)
+            SoundCloudSection.TRACKS -> loadTracks(limit = nextLimit, loadingMore = true)
+            SoundCloudSection.PLAYLISTS -> loadPlaylists(limit = nextLimit, loadingMore = true)
+            SoundCloudSection.DOWNLOADS -> _uiState.update { it.copy(endReached = true) }
+        }
+    }
+
+    private fun loadFeed(
+        refreshing: Boolean = false,
+        limit: Int = INITIAL_FEED_SIZE,
+        loadingMore: Boolean = false,
+    ) = runLoad(
+        "Loading feed…",
+        clearResults = !refreshing && !loadingMore,
+        refreshing = refreshing,
+        loadingMore = loadingMore,
+    ) {
         if (!client.hasSession) {
             throw IllegalStateException("Sign in to SoundCloud to see your personal feed")
         }
-        client.loadFeed()
+        val shelfLimit = limit.coerceAtMost(40)
+        val feed = client.loadFeed(limit)
+        val likes = runCatching { client.loadMyLikes(shelfLimit) }.getOrDefault(emptyList())
+        val history = runCatching { client.loadRecentlyPlayed(shelfLimit) }.getOrDefault(emptyList())
+        val playlists = runCatching { client.loadMyPlaylists(shelfLimit) }.getOrDefault(emptyList())
+        val discover = runCatching { client.loadDiscover(shelfLimit) }.getOrDefault(emptyList())
+        val mixed = (likes.take(6) + feed.take(8) + discover.take(6))
+            .distinctBy { it.url }
+            .take(16)
+        val user = _uiState.value.displayName.ifBlank { _uiState.value.username }
+        val shelves = buildList {
+            if (likes.isNotEmpty()) add(
+                SoundCloudFeedShelf("more_like", "More of what you like", likes),
+            )
+            if (history.isNotEmpty()) add(
+                SoundCloudFeedShelf("recent", "Recently played", history),
+            )
+            if (mixed.isNotEmpty()) add(
+                SoundCloudFeedShelf(
+                    "mixed",
+                    if (user.isBlank()) "Mixed for you" else "Mixed for $user",
+                    mixed,
+                ),
+            )
+            if (discover.isNotEmpty()) add(
+                SoundCloudFeedShelf("curated", "Curated by SoundCloud", discover),
+            )
+            if (playlists.isNotEmpty()) add(
+                SoundCloudFeedShelf("playlists", "Playlists for you", playlists),
+            )
+            if (feed.isNotEmpty()) add(
+                SoundCloudFeedShelf("following", "Latest from people you follow", feed),
+            )
+        }
+        _uiState.update { it.copy(feedShelves = shelves) }
+        feed
     }
 
     private fun loadDiscover() = runLoad("Loading discover…") { client.loadDiscover() }
 
-    private fun loadLikes(refreshing: Boolean = false) = runLoad(
+    private fun loadLikes(
+        refreshing: Boolean = false,
+        limit: Int = INITIAL_LIST_SIZE,
+        loadingMore: Boolean = false,
+    ) = runLoad(
         "Loading likes…",
-        clearResults = !refreshing,
+        clearResults = !refreshing && !loadingMore,
         refreshing = refreshing,
+        loadingMore = loadingMore,
     ) {
-        if (client.hasSession) {
-            client.loadMyLikes()
+        val hits = if (client.hasSession) {
+            client.loadMyLikes(limit)
         } else {
-            client.loadUserLikes(_uiState.value.username)
+            client.loadUserLikes(_uiState.value.username, limit)
         }
+        if (client.hasSession) {
+            _uiState.update { state ->
+                state.copy(
+                    likedTrackUrls = state.likedTrackUrls +
+                        hits.filter { it.kind == SoundCloudSearchHit.Kind.TRACK }.map { it.url },
+                )
+            }
+        }
+        hits
     }
 
-    private fun loadTracks(refreshing: Boolean = false) = runLoad(
+    private fun loadTracks(
+        refreshing: Boolean = false,
+        limit: Int = INITIAL_LIST_SIZE,
+        loadingMore: Boolean = false,
+    ) = runLoad(
         "Loading tracks…",
-        clearResults = !refreshing,
+        clearResults = !refreshing && !loadingMore,
         refreshing = refreshing,
+        loadingMore = loadingMore,
     ) {
         if (client.hasSession) {
-            client.loadMyTracks()
+            client.loadMyTracks(limit)
         } else {
-            client.loadUserTracks(_uiState.value.username)
+            client.loadUserTracks(_uiState.value.username, limit)
         }
     }
 
-    private fun loadPlaylists(refreshing: Boolean = false) = runLoad(
+    private fun loadPlaylists(
+        refreshing: Boolean = false,
+        limit: Int = INITIAL_LIST_SIZE,
+        loadingMore: Boolean = false,
+    ) = runLoad(
         "Loading playlists…",
-        clearResults = !refreshing,
+        clearResults = !refreshing && !loadingMore,
         refreshing = refreshing,
+        loadingMore = loadingMore,
     ) {
         if (client.hasSession) {
-            client.loadMyPlaylists()
+            client.loadMyPlaylists(limit)
         } else {
-            client.loadUserPlaylists(_uiState.value.username)
+            client.loadUserPlaylists(_uiState.value.username, limit)
         }
     }
 
@@ -444,16 +678,19 @@ class SoundCloudViewModel @Inject constructor(
         cancelPrevious: Boolean = true,
         clearResults: Boolean = true,
         refreshing: Boolean = false,
+        loadingMore: Boolean = false,
         block: suspend () -> List<SoundCloudSearchHit>,
     ) {
         if (cancelPrevious) {
             loadJob?.cancel()
         }
         val job = viewModelScope.launch {
+            val previousCount = _uiState.value.results.size
             _uiState.update {
                 it.copy(
-                    isLoading = !refreshing,
+                    isLoading = !refreshing && !loadingMore,
                     isRefreshing = refreshing,
+                    isLoadingMore = loadingMore,
                     errorMessage = null,
                     statusMessage = null,
                     results = if (clearResults) emptyList() else it.results,
@@ -466,7 +703,9 @@ class SoundCloudViewModel @Inject constructor(
                     it.copy(
                         isLoading = false,
                         isRefreshing = false,
+                        isLoadingMore = false,
                         results = hits,
+                        endReached = loadingMore && hits.size <= previousCount,
                         statusMessage = null,
                     )
                 }
@@ -477,6 +716,7 @@ class SoundCloudViewModel @Inject constructor(
                     it.copy(
                         isLoading = false,
                         isRefreshing = false,
+                        isLoadingMore = false,
                         errorMessage = t.message ?: t::class.java.simpleName,
                         statusMessage = null,
                     )
@@ -496,5 +736,9 @@ class SoundCloudViewModel @Inject constructor(
 
     companion object {
         private const val SEARCH_DEBOUNCE_MS = 350L
+        private const val INITIAL_FEED_SIZE = 40
+        private const val INITIAL_LIST_SIZE = 40
+        private const val PAGE_SIZE = 30
+        private const val MAX_RESULTS = 200
     }
 }

@@ -6,6 +6,7 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,9 +22,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -32,16 +36,17 @@ import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.ViewModule
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -49,6 +54,7 @@ import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -57,9 +63,13 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,14 +92,19 @@ import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.ToggleSegmentButton
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
+import com.theveloper.pixelplay.presentation.components.subcomps.LibraryActionRow
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.soundcloud.SoundCloudSearchHit
+import com.theveloper.pixelplay.soundcloud.SoundCloudFeedShelf
 import com.theveloper.pixelplay.soundcloud.SoundCloudSection
 import com.theveloper.pixelplay.soundcloud.SoundCloudViewModel
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 
 /** Material medium width — foldables / tablets / landscape. */
 private const val WIDE_SCREEN_DP = 600
@@ -132,18 +147,18 @@ fun SoundCloudScreen(
     val currentSongId = stablePlayer.currentSong?.id
     val isPlaying = stablePlayer.isPlaying
 
-    val onHitPlay: (SoundCloudSearchHit) -> Unit = remember(viewModel, playerViewModel, scope) {
-        { hit ->
+    val onHitPlay: (SoundCloudSearchHit, List<SoundCloudSearchHit>) -> Unit =
+        remember(viewModel, playerViewModel, scope) {
+        { hit, queueHits ->
             if (hit.kind == SoundCloudSearchHit.Kind.PLAYLIST) {
                 viewModel.openPlaylist(hit)
             } else {
                 scope.launch {
-                    viewModel.setBusy(hit.url)
                     try {
-                        val song = viewModel.resolveToSong(hit)
+                        val (songs, startSong) = viewModel.resolveQueueForPlayback(hit, queueHits)
                         playerViewModel.playSongs(
-                            songsToPlay = listOf(song),
-                            startSong = song,
+                            songsToPlay = songs,
+                            startSong = startSong,
                             queueName = "SoundCloud",
                         )
                         viewModel.setIdle()
@@ -196,148 +211,171 @@ fun SoundCloudScreen(
     }
 
     // Keep Back inside SoundCloud when browsing a playlist (don't jump to Library).
-    BackHandler(enabled = uiState.canNavigateBack) {
+    BackHandler(
+        enabled = uiState.canNavigateBack || uiState.browsingPlaylistUrl != null,
+    ) {
         viewModel.navigateBack()
     }
 
-    Column(
+    val headerContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+    Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .padding(paddingValues),
-    ) {
-        TopAppBar(
-            title = {
-                Text(
-                    modifier = Modifier.padding(start = 8.dp),
-                    text = stringResource(R.string.soundcloud_tab_title),
-                    fontFamily = GoogleSansRounded,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 40.sp,
-                    letterSpacing = 1.sp,
-                )
-            },
-            actions = {
-                FilledIconButton(
-                    modifier = Modifier.padding(end = 14.dp),
-                    onClick = { navController.navigateSafely(Screen.Experimental.route) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    ),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.rounded_settings_24),
-                        contentDescription = stringResource(R.string.soundcloud_cd_open_settings),
-                    )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent,
-                scrolledContainerColor = Color.Transparent,
-            ),
-        )
-
-        PrimaryScrollableTabRow(
-            selectedTabIndex = selectedIndex.coerceAtLeast(0),
-            containerColor = Color.Transparent,
-            edgePadding = 12.dp,
-            indicator = {},
-            divider = {},
-        ) {
-            sections.forEachIndexed { index, section ->
-                TabAnimation(
-                    index = index,
-                    title = section.name,
-                    selectedIndex = if (selectedIndex < 0) -1 else selectedIndex,
-                    onClick = { viewModel.selectSection(section) },
-                ) {
-                    Text(
-                        text = stringResource(section.labelRes).uppercase(),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontFamily = GoogleSansRounded,
-                        fontWeight = if (selectedIndex == index) FontWeight.Bold else FontWeight.Medium,
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = uiState.query,
-            onValueChange = viewModel::onQueryChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            singleLine = true,
-            label = { Text(stringResource(R.string.soundcloud_query_label)) },
-            placeholder = { Text(stringResource(R.string.soundcloud_query_hint)) },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            trailingIcon = {
-                if (uiState.query.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.onQueryChange("") }) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = stringResource(R.string.common_clear_search),
+            .padding(paddingValues)
+            .background(headerContainerColor),
+        topBar = {
+            Column(modifier = Modifier.background(headerContainerColor)) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            modifier = Modifier.padding(start = 8.dp),
+                            text = stringResource(R.string.soundcloud_tab_title),
+                            fontFamily = GoogleSansRounded,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 40.sp,
+                            letterSpacing = 1.sp,
                         )
+                    },
+                    actions = {
+                        FilledIconButton(
+                            modifier = Modifier.padding(end = 14.dp),
+                            onClick = { navController.navigateSafely(Screen.Experimental.route) },
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.rounded_settings_24),
+                                contentDescription = stringResource(R.string.soundcloud_cd_open_settings),
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent,
+                    ),
+                )
+
+                PrimaryScrollableTabRow(
+                    selectedTabIndex = selectedIndex.coerceAtLeast(0),
+                    containerColor = Color.Transparent,
+                    edgePadding = 12.dp,
+                    indicator = {},
+                    divider = {},
+                ) {
+                    sections.forEachIndexed { index, section ->
+                        TabAnimation(
+                            index = index,
+                            title = section.name,
+                            selectedIndex = if (selectedIndex < 0) -1 else selectedIndex,
+                            onClick = { viewModel.selectSection(section) },
+                        ) {
+                            Text(
+                                text = stringResource(section.labelRes).uppercase(),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontFamily = GoogleSansRounded,
+                                fontWeight = if (selectedIndex == index) FontWeight.Bold else FontWeight.Medium,
+                            )
+                        }
                     }
                 }
-            },
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .height(40.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ToggleSegmentButton(
-                modifier = Modifier.weight(1f),
-                active = useTiles,
-                activeColor = MaterialTheme.colorScheme.primary,
-                inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
-                activeContentColor = MaterialTheme.colorScheme.onPrimary,
-                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                activeCornerRadius = 32.dp,
-                onClick = { viewModel.setUseTiles(true) },
-                text = stringResource(R.string.soundcloud_view_tiles),
-                imageVector = Icons.Rounded.ViewModule,
-            )
-            ToggleSegmentButton(
-                modifier = Modifier.weight(1f),
-                active = !useTiles,
-                activeColor = MaterialTheme.colorScheme.primary,
-                inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
-                activeContentColor = MaterialTheme.colorScheme.onPrimary,
-                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                activeCornerRadius = 32.dp,
-                onClick = { viewModel.setUseTiles(false) },
-                text = stringResource(R.string.soundcloud_view_list),
-                imageVector = Icons.AutoMirrored.Rounded.ViewList,
-            )
-            FilledTonalButton(
-                onClick = onShuffle,
-                enabled = canShuffle,
-                modifier = Modifier.height(40.dp),
-                shape = RoundedCornerShape(32.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Shuffle,
-                    contentDescription = stringResource(R.string.soundcloud_cd_shuffle),
-                    modifier = Modifier.size(ButtonDefaults.IconSize),
-                )
-                Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
-                Text(stringResource(R.string.soundcloud_shuffle))
             }
-        }
+        },
+    ) { scaffoldPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = scaffoldPadding.calculateTopPadding())
+                .background(headerContainerColor),
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.surface,
+                shape = AbsoluteSmoothCornerShape(
+                    cornerRadiusTL = 34.dp,
+                    cornerRadiusTR = 34.dp,
+                    cornerRadiusBL = 0.dp,
+                    cornerRadiusBR = 0.dp,
+                    smoothnessAsPercentTL = 60,
+                    smoothnessAsPercentTR = 60,
+                    smoothnessAsPercentBL = 60,
+                    smoothnessAsPercentBR = 60,
+                ),
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
 
-        Spacer(modifier = Modifier.height(8.dp))
+                    LibraryActionRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp, top = 10.dp, end = 12.dp),
+                        onMainActionClick = onShuffle,
+                        mainActionEnabled = canShuffle,
+                        iconRotation = 0f,
+                        onSortClick = {},
+                        showSortButton = false,
+                        isPlaylistTab = false,
+                        isFoldersTab = false,
+                        currentFolder = null,
+                        folderRootPath = "",
+                        folderRootLabel = "",
+                        onFolderClick = {},
+                        onNavigateBack = {},
+                        trailingContent = {
+                            ToggleSegmentButton(
+                                modifier = Modifier.size(42.dp),
+                                active = useTiles,
+                                activeColor = MaterialTheme.colorScheme.primary,
+                                inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
+                                activeContentColor = MaterialTheme.colorScheme.onPrimary,
+                                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                activeCornerRadius = 26.dp,
+                                onClick = { viewModel.setUseTiles(true) },
+                                imageVector = Icons.Rounded.ViewModule,
+                                contentDesc = stringResource(R.string.soundcloud_cd_view_tiles),
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            ToggleSegmentButton(
+                                modifier = Modifier.size(42.dp),
+                                active = !useTiles,
+                                activeColor = MaterialTheme.colorScheme.primary,
+                                inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
+                                activeContentColor = MaterialTheme.colorScheme.onPrimary,
+                                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                activeCornerRadius = 26.dp,
+                                onClick = { viewModel.setUseTiles(false) },
+                                imageVector = Icons.AutoMirrored.Rounded.ViewList,
+                                contentDesc = stringResource(R.string.soundcloud_cd_view_list),
+                            )
+                        },
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = uiState.query,
+                        onValueChange = viewModel::onQueryChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.soundcloud_query_label)) },
+                        placeholder = { Text(stringResource(R.string.soundcloud_query_hint)) },
+                        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (uiState.query.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.onQueryChange("") }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = stringResource(R.string.common_clear_search),
+                                    )
+                                }
+                            }
+                        },
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
         uiState.browsingPlaylistTitle?.let { title ->
             Row(
@@ -396,9 +434,40 @@ fun SoundCloudScreen(
                 )
             },
         ) {
-            if (useTiles) {
+            if (
+                uiState.section == SoundCloudSection.FEED &&
+                uiState.browsingPlaylistUrl == null &&
+                uiState.feedShelves.isNotEmpty()
+            ) {
+                SoundCloudFeedHome(
+                    shelves = uiState.feedShelves,
+                    useTiles = useTiles,
+                    enabled = !uiState.isLoading,
+                    resolvingKey = uiState.resolvingKey,
+                    contentPadding = contentPadding,
+                    isWideScreen = isWideScreen,
+                    likedTrackUrls = uiState.likedTrackUrls,
+                    likingUrl = uiState.likingUrl,
+                    onPlay = onHitPlay,
+                    onDownload = viewModel::download,
+                    onToggleLike = viewModel::toggleLike,
+                    onLoadMore = viewModel::loadMore,
+                )
+            } else if (useTiles) {
+                val gridState = rememberLazyGridState()
+                LaunchedEffect(gridState, uiState.results.size, uiState.downloads.size) {
+                    snapshotFlow {
+                        val info = gridState.layoutInfo
+                        val total = info.totalItemsCount
+                        total > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= total - gridColumns
+                    }
+                        .distinctUntilChanged()
+                        .filter { it }
+                        .collect { viewModel.loadMore() }
+                }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(gridColumns),
+                    state = gridState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = contentPadding,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -419,14 +488,29 @@ fun SoundCloudScreen(
                                 hit = hit,
                                 enabled = !uiState.isLoading,
                                 isResolving = uiState.resolvingKey == hit.url,
-                                onPlay = { onHitPlay(hit) },
+                                isLiked = hit.url in uiState.likedTrackUrls,
+                                isLiking = uiState.likingUrl == hit.url,
+                                onPlay = { onHitPlay(hit, uiState.results) },
                                 onDownload = { viewModel.download(hit) },
+                                onToggleLike = { viewModel.toggleLike(hit) },
                             )
                         }
                     }
                 }
             } else {
+                val listState = rememberLazyListState()
+                LaunchedEffect(listState, uiState.results.size, uiState.downloads.size) {
+                    snapshotFlow {
+                        val info = listState.layoutInfo
+                        val total = info.totalItemsCount
+                        total > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= total - 3
+                    }
+                        .distinctUntilChanged()
+                        .filter { it }
+                        .collect { viewModel.loadMore() }
+                }
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = contentPadding,
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -448,8 +532,129 @@ fun SoundCloudScreen(
                                 hit = hit,
                                 enabled = !uiState.isLoading,
                                 isResolving = uiState.resolvingKey == hit.url,
-                                onPlay = { onHitPlay(hit) },
+                                isLiked = hit.url in uiState.likedTrackUrls,
+                                isLiking = uiState.likingUrl == hit.url,
+                                onPlay = { onHitPlay(hit, uiState.results) },
                                 onDownload = { viewModel.download(hit) },
+                                onToggleLike = { viewModel.toggleLike(hit) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoundCloudFeedHome(
+    shelves: List<SoundCloudFeedShelf>,
+    useTiles: Boolean,
+    enabled: Boolean,
+    resolvingKey: String?,
+    contentPadding: PaddingValues,
+    isWideScreen: Boolean,
+    likedTrackUrls: Set<String>,
+    likingUrl: String?,
+    onPlay: (SoundCloudSearchHit, List<SoundCloudSearchHit>) -> Unit,
+    onDownload: (SoundCloudSearchHit) -> Unit,
+    onToggleLike: (SoundCloudSearchHit) -> Unit,
+    onLoadMore: () -> Unit,
+) {
+    var selectedShelfId by remember(shelves.map { it.id }) {
+        mutableStateOf(shelves.firstOrNull()?.id.orEmpty())
+    }
+    val visibleShelves = if (isWideScreen) {
+        shelves
+    } else {
+        listOfNotNull(shelves.firstOrNull { it.id == selectedShelfId } ?: shelves.firstOrNull())
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(listState, shelves.sumOf { it.items.size }) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val total = info.totalItemsCount
+            total > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= total - 2
+        }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { onLoadMore() }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = contentPadding,
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+    ) {
+        if (!isWideScreen) {
+            item(key = "feed-submenu") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(shelves, key = { it.id }) { shelf ->
+                        FilterChip(
+                            selected = shelf.id == selectedShelfId,
+                            onClick = { selectedShelfId = shelf.id },
+                            label = {
+                                Text(
+                                    text = shelf.title,
+                                    fontFamily = GoogleSansRounded,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        items(visibleShelves, key = { it.id }) { shelf ->
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = shelf.title,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontFamily = GoogleSansRounded,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                if (useTiles) {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(shelf.items, key = { "${shelf.id}:${it.url}" }) { hit ->
+                            Box(modifier = Modifier.width(176.dp)) {
+                                SoundCloudResultTile(
+                                    hit = hit,
+                                    enabled = enabled,
+                                    isResolving = resolvingKey == hit.url,
+                                    isLiked = hit.url in likedTrackUrls,
+                                    isLiking = likingUrl == hit.url,
+                                    onPlay = { onPlay(hit, shelf.items) },
+                                    onDownload = { onDownload(hit) },
+                                    onToggleLike = { onToggleLike(hit) },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        shelf.items.take(6).forEach { hit ->
+                            SoundCloudResultRow(
+                                hit = hit,
+                                enabled = enabled,
+                                isResolving = resolvingKey == hit.url,
+                                isLiked = hit.url in likedTrackUrls,
+                                isLiking = likingUrl == hit.url,
+                                onPlay = { onPlay(hit, shelf.items) },
+                                onDownload = { onDownload(hit) },
+                                onToggleLike = { onToggleLike(hit) },
                             )
                         }
                     }
@@ -480,7 +685,6 @@ private fun SoundCloudSongTile(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onPlay),
     ) {
         Box(
@@ -551,13 +755,15 @@ private fun SoundCloudResultTile(
     hit: SoundCloudSearchHit,
     enabled: Boolean,
     isResolving: Boolean = false,
+    isLiked: Boolean = false,
+    isLiking: Boolean = false,
     onPlay: () -> Unit,
     onDownload: () -> Unit,
+    onToggleLike: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
             .clickable(enabled = enabled && !isResolving, onClick = onPlay),
     ) {
         Box(
@@ -604,6 +810,28 @@ private fun SoundCloudResultTile(
                 }
             } else if (hit.kind == SoundCloudSearchHit.Kind.TRACK) {
                 IconButton(
+                    onClick = onToggleLike,
+                    enabled = enabled && !isLiking,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ),
+                ) {
+                    if (isLiking) {
+                        LoadingIndicator(modifier = Modifier.size(22.dp))
+                    } else {
+                        Icon(
+                            imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = stringResource(
+                                if (isLiked) R.string.soundcloud_unlike else R.string.soundcloud_like,
+                            ),
+                        )
+                    }
+                }
+                IconButton(
                     onClick = onDownload,
                     enabled = enabled,
                     modifier = Modifier
@@ -645,8 +873,11 @@ private fun SoundCloudResultRow(
     hit: SoundCloudSearchHit,
     enabled: Boolean,
     isResolving: Boolean = false,
+    isLiked: Boolean = false,
+    isLiking: Boolean = false,
     onPlay: () -> Unit,
     onDownload: () -> Unit,
+    onToggleLike: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -733,6 +964,19 @@ private fun SoundCloudResultRow(
             }
 
             if (hit.kind == SoundCloudSearchHit.Kind.TRACK && !isResolving) {
+                IconButton(onClick = onToggleLike, enabled = enabled && !isLiking) {
+                    if (isLiking) {
+                        LoadingIndicator(modifier = Modifier.size(22.dp))
+                    } else {
+                        Icon(
+                            imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = stringResource(
+                                if (isLiked) R.string.soundcloud_unlike else R.string.soundcloud_like,
+                            ),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 IconButton(onClick = onDownload, enabled = enabled) {
                     Icon(
                         Icons.Rounded.Download,

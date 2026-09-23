@@ -20,6 +20,9 @@ import javax.inject.Singleton
 class SoundCloudDownloadService @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
+    private val artworkPreferences by lazy {
+        context.getSharedPreferences(ARTWORK_PREFERENCES, Context.MODE_PRIVATE)
+    }
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
@@ -78,6 +81,7 @@ class SoundCloudDownloadService @Inject constructor(
                 values.clear()
                 values.put(MediaStore.Audio.Media.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
+                rememberArtwork(fileName, track.artworkUrl)
                 return File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
                     "PixelPlayer/SoundCloud/$fileName",
@@ -93,9 +97,24 @@ class SoundCloudDownloadService @Inject constructor(
             }
             val outFile = File(dir, fileName)
             outFile.outputStream().use { out -> body.byteStream().copyTo(out) }
+            rememberArtwork(fileName, track.artworkUrl)
             return outFile
         }
     }
+
+    fun rememberArtwork(song: Song, artworkUrl: String?) {
+        val fileName = song.path.takeIf { it.isNotBlank() }?.let { File(it).name }
+            ?: return
+        rememberArtwork(fileName, artworkUrl)
+    }
+
+    private fun rememberArtwork(fileName: String, artworkUrl: String?) {
+        val usableUrl = artworkUrl?.takeIf { it.isNotBlank() } ?: return
+        artworkPreferences.edit().putString(fileName, usableUrl).apply()
+    }
+
+    private fun savedArtwork(fileName: String?): String? =
+        fileName?.let { artworkPreferences.getString(it, null) }?.takeIf { it.isNotBlank() }
 
     /** Local SoundCloud downloads as playable [Song]s (MediaStore first, file fallback). */
     fun listDownloadedSongs(): List<Song> {
@@ -172,7 +191,7 @@ class SoundCloudDownloadService @Inject constructor(
                         path = path,
                         songId = id,
                         forceRefresh = false,
-                    )
+                    ) ?: savedArtwork(cursor.getString(displayCol))
                     songs.add(
                         Song(
                             id = id.toString(),
@@ -224,7 +243,7 @@ class SoundCloudDownloadService @Inject constructor(
             albumArtist = artist,
             path = file.absolutePath,
             contentUriString = file.toURI().toString(),
-            albumArtUriString = null,
+            albumArtUriString = savedArtwork(file.name),
             duration = 0L,
             genre = "SoundCloud",
             dateAdded = file.lastModified() / 1000L,
@@ -241,6 +260,7 @@ class SoundCloudDownloadService @Inject constructor(
     }
 
     companion object {
+        private const val ARTWORK_PREFERENCES = "soundcloud_download_artwork"
         private val AUDIO_EXTS = setOf("mp3", "m4a", "ogg", "aac", "wav", "flac")
     }
 }
