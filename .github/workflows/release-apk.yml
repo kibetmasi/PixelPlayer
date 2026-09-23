@@ -78,8 +78,8 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
-          # Monotonic versionCode so sideload installs upgrade in place (keeps app data).
-          VERSION_CODE="$(date -u +%y%m%d%H%M)"
+          # Must fit in signed 32-bit Int (max 2147483647). yyMMddHHmm overflows.
+          VERSION_CODE="$(( $(date -u +%s) / 60 ))"
           echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
           echo "Resolved release ${TAG} (prerelease=${PRERELEASE}, versionCode=${VERSION_CODE})"
 
