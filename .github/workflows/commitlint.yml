@@ -46,8 +46,15 @@ jobs:
         if: github.event_name == 'push'
         run: |
           # Validate every new commit on the push (range from before → after).
+          # Force-pushes rewrite `before` so that SHA may no longer exist — fall back
+          # to linting only HEAD instead of failing with "Invalid revision range".
           BEFORE="${{ github.event.before }}"
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+          ZERO="0000000000000000000000000000000000000000"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ]; then
+            echo "No previous SHA (new branch); linting HEAD only."
+            npx commitlint --last --verbose
+          elif ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "Previous SHA $BEFORE is unreachable (likely force-push); linting HEAD only."
             npx commitlint --last --verbose
           else
             npx commitlint --from "$BEFORE" --to "${{ github.sha }}" --verbose
