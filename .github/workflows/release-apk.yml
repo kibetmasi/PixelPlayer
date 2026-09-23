@@ -78,7 +78,10 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved release ${TAG} (prerelease=${PRERELEASE})"
+          # Monotonic versionCode so sideload installs upgrade in place (keeps app data).
+          VERSION_CODE="$(date -u +%y%m%d%H%M)"
+          echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release ${TAG} (prerelease=${PRERELEASE}, versionCode=${VERSION_CODE})"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -110,7 +113,11 @@ jobs:
           echo "keyPassword=994273" >> keystore.properties
 
       - name: Build Phone release APKs
-        run: gradle :app:assembleRelease -Ppixelplay.enableAbiSplits=true
+        run: >
+          gradle :app:assembleRelease
+          -Ppixelplay.enableAbiSplits=true
+          -PAPP_VERSION_NAME=${{ steps.meta.outputs.version }}
+          -PAPP_VERSION_CODE=${{ steps.meta.outputs.version_code }}
 
       - name: Verify APKs
         run: |
