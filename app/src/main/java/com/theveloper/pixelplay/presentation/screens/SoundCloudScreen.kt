@@ -1,3 +1,8 @@
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+)
+
 package com.theveloper.pixelplay.presentation.screens
 
 import androidx.activity.compose.BackHandler
@@ -89,7 +94,6 @@ import kotlinx.coroutines.launch
 /** Material medium width — foldables / tablets / landscape. */
 private const val WIDE_SCREEN_DP = 600
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SoundCloudScreen(
     playerViewModel: PlayerViewModel,
