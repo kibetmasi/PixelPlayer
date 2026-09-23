@@ -122,9 +122,11 @@ import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.ToggleSegmentButton
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import com.theveloper.pixelplay.presentation.components.subcomps.LibraryActionRow
+import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
+import com.theveloper.pixelplay.soundcloud.SoundCloudClient
 import com.theveloper.pixelplay.soundcloud.SoundCloudSearchHit
 import com.theveloper.pixelplay.soundcloud.SoundCloudFeedShelf
 import com.theveloper.pixelplay.soundcloud.SoundCloudSection
@@ -207,8 +209,12 @@ fun SoundCloudScreen(
         top = 8.dp,
         bottom = bottomBarHeightDp + MiniPlayerHeight + ListExtraBottomGap,
     )
-    val currentSongId = stablePlayer.currentSong?.id
+    val currentSong = stablePlayer.currentSong
+    val currentSongId = currentSong?.id
     val isPlaying = stablePlayer.isPlaying
+
+    fun hitIsCurrent(hit: SoundCloudSearchHit): Boolean =
+        isSoundCloudHitCurrent(hit, currentSong)
 
     val onHitPlay: (SoundCloudSearchHit, List<SoundCloudSearchHit>) -> Unit =
         remember(viewModel, playerViewModel, scope) {
@@ -623,6 +629,8 @@ fun SoundCloudScreen(
                     isWideScreen = isWideScreen,
                     likedTrackUrls = uiState.likedTrackUrls,
                     likingUrl = uiState.likingUrl,
+                    currentSong = currentSong,
+                    isPlaying = isPlaying,
                     onPlay = onHitPlay,
                     onDownload = viewModel::download,
                     onToggleLike = viewModel::toggleLike,
@@ -668,12 +676,15 @@ fun SoundCloudScreen(
                         }
                     } else {
                         items(uiState.results, key = { it.url + it.kind.name }) { hit ->
+                            val isCurrent = hitIsCurrent(hit)
                             SoundCloudResultTile(
                                 hit = hit,
                                 enabled = !uiState.isLoading,
                                 isResolving = uiState.resolvingKey == hit.url,
                                 isLiked = hit.url in uiState.likedTrackUrls,
                                 isLiking = uiState.likingUrl == hit.url,
+                                isCurrent = isCurrent,
+                                isPlaying = isCurrent && isPlaying,
                                 onPlay = { onHitPlay(hit, uiState.results) },
                                 onDownload = { viewModel.download(hit) },
                                 onToggleLike = { viewModel.toggleLike(hit) },
@@ -727,12 +738,15 @@ fun SoundCloudScreen(
                         }
                     } else {
                         items(uiState.results, key = { it.url + it.kind.name }) { hit ->
+                            val isCurrent = hitIsCurrent(hit)
                             SoundCloudResultRow(
                                 hit = hit,
                                 enabled = !uiState.isLoading,
                                 isResolving = uiState.resolvingKey == hit.url,
                                 isLiked = hit.url in uiState.likedTrackUrls,
                                 isLiking = uiState.likingUrl == hit.url,
+                                isCurrent = isCurrent,
+                                isPlaying = isCurrent && isPlaying,
                                 onPlay = { onHitPlay(hit, uiState.results) },
                                 onDownload = { viewModel.download(hit) },
                                 onToggleLike = { viewModel.toggleLike(hit) },
@@ -882,6 +896,8 @@ private fun SoundCloudFeedHome(
     isWideScreen: Boolean,
     likedTrackUrls: Set<String>,
     likingUrl: String?,
+    currentSong: Song?,
+    isPlaying: Boolean,
     onPlay: (SoundCloudSearchHit, List<SoundCloudSearchHit>) -> Unit,
     onDownload: (SoundCloudSearchHit) -> Unit,
     onToggleLike: (SoundCloudSearchHit) -> Unit,
@@ -956,6 +972,7 @@ private fun SoundCloudFeedHome(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
                                 rowHits.forEach { hit ->
+                                    val isCurrent = isSoundCloudHitCurrent(hit, currentSong)
                                     Box(modifier = Modifier.weight(1f)) {
                                         SoundCloudResultTile(
                                             hit = hit,
@@ -963,6 +980,8 @@ private fun SoundCloudFeedHome(
                                             isResolving = resolvingKey == hit.url,
                                             isLiked = hit.url in likedTrackUrls,
                                             isLiking = likingUrl == hit.url,
+                                            isCurrent = isCurrent,
+                                            isPlaying = isCurrent && isPlaying,
                                             onPlay = { onPlay(hit, shelf.items) },
                                             onDownload = { onDownload(hit) },
                                             onToggleLike = { onToggleLike(hit) },
@@ -982,12 +1001,15 @@ private fun SoundCloudFeedHome(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         shelf.items.take(6).forEach { hit ->
+                            val isCurrent = isSoundCloudHitCurrent(hit, currentSong)
                             SoundCloudResultRow(
                                 hit = hit,
                                 enabled = enabled,
                                 isResolving = resolvingKey == hit.url,
                                 isLiked = hit.url in likedTrackUrls,
                                 isLiking = likingUrl == hit.url,
+                                isCurrent = isCurrent,
+                                isPlaying = isCurrent && isPlaying,
                                 onPlay = { onPlay(hit, shelf.items) },
                                 onDownload = { onDownload(hit) },
                                 onToggleLike = { onToggleLike(hit) },
@@ -1213,14 +1235,23 @@ private fun SoundCloudSongTile(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.PlayArrow else Icons.Rounded.Cloud,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .align(Alignment.Center),
-                    )
+                    if (isPlaying) {
+                        PlayingEqIcon(
+                            modifier = Modifier
+                                .size(width = 28.dp, height = 24.dp)
+                                .align(Alignment.Center),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .align(Alignment.Center),
+                        )
+                    }
                 }
             }
         }
@@ -1251,6 +1282,8 @@ private fun SoundCloudResultTile(
     isResolving: Boolean = false,
     isLiked: Boolean = false,
     isLiking: Boolean = false,
+    isCurrent: Boolean = false,
+    isPlaying: Boolean = false,
     onPlay: () -> Unit,
     onDownload: () -> Unit,
     onToggleLike: () -> Unit,
@@ -1292,6 +1325,30 @@ private fun SoundCloudResultTile(
                     )
                 }
             }
+            if (isCurrent && !isResolving) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    if (isPlaying) {
+                        PlayingEqIcon(
+                            modifier = Modifier
+                                .size(width = 28.dp, height = 24.dp)
+                                .align(Alignment.Center),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .align(Alignment.Center),
+                        )
+                    }
+                }
+            }
             if (isResolving) {
                 Surface(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
@@ -1303,7 +1360,7 @@ private fun SoundCloudResultTile(
                             .align(Alignment.Center),
                     )
                 }
-            } else {
+            } else if (!isCurrent) {
                 IconButton(
                     onClick = onShare,
                     enabled = enabled && hit.url.isNotBlank(),
@@ -1321,7 +1378,7 @@ private fun SoundCloudResultTile(
                     )
                 }
             }
-            if (!isResolving && hit.kind == SoundCloudSearchHit.Kind.TRACK) {
+            if (!isResolving && hit.kind == SoundCloudSearchHit.Kind.TRACK && !isCurrent) {
                 IconButton(
                     onClick = onToggleLike,
                     enabled = enabled && !isLiking,
@@ -1370,6 +1427,7 @@ private fun SoundCloudResultTile(
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
         Text(
             text = hit.artist,
@@ -1388,13 +1446,16 @@ private fun SoundCloudResultRow(
     isResolving: Boolean = false,
     isLiked: Boolean = false,
     isLiking: Boolean = false,
+    isCurrent: Boolean = false,
+    isPlaying: Boolean = false,
     onPlay: () -> Unit,
     onDownload: () -> Unit,
     onToggleLike: () -> Unit,
     onShare: () -> Unit,
 ) {
+    val colors = MaterialTheme.colorScheme
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = if (isCurrent) colors.primaryContainer.copy(alpha = 0.55f) else colors.surfaceContainer,
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -1433,6 +1494,31 @@ private fun SoundCloudResultRow(
                         )
                     }
                 }
+                if (isCurrent && !isResolving) {
+                    Surface(
+                        color = colors.primary.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        if (isPlaying) {
+                            PlayingEqIcon(
+                                modifier = Modifier
+                                    .size(width = 18.dp, height = 16.dp)
+                                    .align(Alignment.Center),
+                                color = colors.onPrimary,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = null,
+                                tint = colors.onPrimary,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .align(Alignment.Center),
+                            )
+                        }
+                    }
+                }
                 if (isResolving) {
                     Surface(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
@@ -1455,6 +1541,7 @@ private fun SoundCloudResultRow(
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 2,
+                    color = if (isCurrent) colors.primary else colors.onSurface,
                 )
                 Text(
                     text = hit.artist,
@@ -1508,6 +1595,12 @@ private fun SoundCloudResultRow(
             }
             if (isResolving) {
                 LoadingIndicator(modifier = Modifier.size(24.dp))
+            } else if (isCurrent) {
+                PlayingEqIcon(
+                    modifier = Modifier.size(width = 18.dp, height = 16.dp),
+                    color = colors.primary,
+                    isPlaying = isPlaying,
+                )
             } else {
                 Icon(
                     imageVector = if (hit.kind == SoundCloudSearchHit.Kind.PLAYLIST) {
@@ -1523,6 +1616,15 @@ private fun SoundCloudResultRow(
     }
 }
 
+
+private fun isSoundCloudHitCurrent(hit: SoundCloudSearchHit, currentSong: Song?): Boolean {
+    if (currentSong == null || hit.kind != SoundCloudSearchHit.Kind.TRACK) return false
+    if (currentSong.id == SoundCloudClient.songIdForUrl(hit.url)) return true
+    // Fallback when an older queue used a resolved URL hash instead of the list permalink.
+    return currentSong.album == "SoundCloud" &&
+        currentSong.title == hit.title &&
+        currentSong.artist == hit.artist
+}
 
 private fun shareSoundCloudLink(context: android.content.Context, hit: SoundCloudSearchHit) {
     val url = hit.url.trim()

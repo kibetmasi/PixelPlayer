@@ -266,7 +266,7 @@ class SoundCloudViewModel @Inject constructor(
 
     suspend fun resolveToSong(hit: SoundCloudSearchHit) = withContext(Dispatchers.IO) {
         ensureClient()
-        client.toSong(client.resolveTrack(hit.url))
+        client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
     }
 
     /**
@@ -292,7 +292,7 @@ class SoundCloudViewModel @Inject constructor(
                 candidates.map { hit ->
                     async {
                         gate.withPermit {
-                            runCatching { hit to client.toSong(client.resolveTrack(hit.url)) }
+                            runCatching { hit to client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url) }
                                 .onFailure { Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url) }
                                 .getOrNull()
                         }
@@ -337,7 +337,7 @@ class SoundCloudViewModel @Inject constructor(
                     async {
                         gate.withPermit {
                             try {
-                                client.toSong(client.resolveTrack(hit.url))
+                                client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
                             } catch (t: Throwable) {
                                 Timber.w(t, "Skip unplayable SoundCloud track: %s", hit.url)
                                 null

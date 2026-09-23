@@ -46,7 +46,8 @@
 # [NUEVO] Regla general para mantener metadatos de Kotlin, puede ayudar a R8
 -keep class kotlin.Metadata { *; }
 
-# ExoPlayer FFmpeg extension
+# ExoPlayer extensions loaded via reflection (DefaultMediaSourceFactory)
+-keep class androidx.media3.exoplayer.hls.** { *; }
 -keep class androidx.media3.decoder.ffmpeg.** { *; }
 -keep class androidx.media3.exoplayer.ffmpeg.** { *; }
 

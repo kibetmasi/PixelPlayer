@@ -188,8 +188,9 @@ class SoundCloudClient @Inject constructor(
         )
     }
 
-    fun toSong(track: SoundCloudResolvedTrack): Song {
-        val id = "sc_${track.url.hashCode().toUInt()}"
+    fun toSong(track: SoundCloudResolvedTrack, permalinkUrl: String = track.url): Song {
+        // Prefer the list permalink so UI can match the now-playing row without resolving again.
+        val id = songIdForUrl(permalinkUrl.ifBlank { track.url })
         return Song(
             id = id,
             title = track.title,
@@ -369,6 +370,9 @@ class SoundCloudClient @Inject constructor(
 
     companion object {
         private val initialized = AtomicBoolean(false)
+
+        fun songIdForUrl(url: String): String =
+            "sc_${url.trim().hashCode().toUInt()}"
 
         private fun ensureInitialized(downloader: SoundCloudDownloader) {
             if (initialized.compareAndSet(false, true)) {
