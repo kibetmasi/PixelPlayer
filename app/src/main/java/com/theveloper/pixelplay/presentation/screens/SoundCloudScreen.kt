@@ -6,6 +6,30 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import androidx.activity.compose.BackHandler
+import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
+import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
+import com.theveloper.pixelplay.presentation.components.subcomps.SelectionActionRow
+import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
+import com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet
+import com.theveloper.pixelplay.presentation.components.MultiSelectionBottomSheet
+import com.theveloper.pixelplay.presentation.components.EditMultipleSongsSheet
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -125,6 +149,32 @@ fun SoundCloudScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val stablePlayer by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val playlistViewModel: PlaylistViewModel = hiltViewModel()
+    val multiSelectionState = playerViewModel.multiSelectionStateHolder
+    val selectedSongs by multiSelectionState.selectedSongs.collectAsStateWithLifecycle()
+    val isSelectionMode by multiSelectionState.isSelectionMode.collectAsStateWithLifecycle()
+    val selectedSongIds by multiSelectionState.selectedSongIds.collectAsStateWithLifecycle()
+    val favoriteSongIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle()
+    var showMultiSelectionSheet by remember { mutableStateOf(false) }
+    var showPlaylistBottomSheet by remember { mutableStateOf(false) }
+    var showBatchEditSheet by remember { mutableStateOf(false) }
+    var playlistSheetSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    val downloadsSelectionActive =
+        isSelectionMode && uiState.section == SoundCloudSection.DOWNLOADS
+    val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val navBarCompactMode by playerViewModel.navBarCompactMode.collectAsStateWithLifecycle()
+    val bottomBarHeightDp = resolveNavBarOccupiedHeight(systemNavBarInset, navBarCompactMode)
+    val onDownloadLongPress: (Song) -> Unit = remember(multiSelectionState, haptic) {
+        { song ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            multiSelectionState.toggleSelection(song)
+        }
+    }
+    val onDownloadSelectionToggle: (Song) -> Unit = remember(multiSelectionState) {
+        { song -> multiSelectionState.toggleSelection(song) }
+    }
     val sections = remember {
         SoundCloudSection.entries.filter { it != SoundCloudSection.SEARCH }
     }
@@ -222,9 +272,30 @@ fun SoundCloudScreen(
 
     // Keep Back inside SoundCloud when browsing a playlist (don't jump to Library).
     BackHandler(
-        enabled = uiState.canNavigateBack || uiState.browsingPlaylistUrl != null,
+        enabled = downloadsSelectionActive,
+    ) {
+        multiSelectionState.clearSelection()
+        showMultiSelectionSheet = false
+    }
+    BackHandler(
+        enabled = !downloadsSelectionActive &&
+            (uiState.canNavigateBack || uiState.browsingPlaylistUrl != null),
     ) {
         viewModel.navigateBack()
+    }
+
+    LaunchedEffect(uiState.section) {
+        if (uiState.section != SoundCloudSection.DOWNLOADS) {
+            multiSelectionState.clearSelection()
+            showMultiSelectionSheet = false
+            showPlaylistBottomSheet = false
+            showBatchEditSheet = false
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            multiSelectionState.clearSelection()
+        }
     }
 
     val headerContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
@@ -337,50 +408,72 @@ fun SoundCloudScreen(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
 
-                    LibraryActionRow(
+                    AnimatedContent(
+                        targetState = downloadsSelectionActive,
+                        label = "SoundCloudActionRowMode",
+                        transitionSpec = {
+                            (slideInHorizontally { -it } + fadeIn()) togetherWith
+                                (slideOutHorizontally { it } + fadeOut())
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 8.dp, top = 10.dp, end = 12.dp),
-                        onMainActionClick = onShuffle,
-                        mainActionEnabled = canShuffle,
-                        iconRotation = 0f,
-                        onSortClick = {},
-                        showSortButton = false,
-                        isPlaylistTab = false,
-                        isFoldersTab = false,
-                        currentFolder = null,
-                        folderRootPath = "",
-                        folderRootLabel = "",
-                        onFolderClick = {},
-                        onNavigateBack = {},
-                        trailingContent = {
-                            ToggleSegmentButton(
-                                modifier = Modifier.size(42.dp),
-                                active = useTiles,
-                                activeColor = MaterialTheme.colorScheme.primary,
-                                inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
-                                activeContentColor = MaterialTheme.colorScheme.onPrimary,
-                                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                activeCornerRadius = 26.dp,
-                                onClick = { viewModel.setUseTiles(true) },
-                                imageVector = Icons.Rounded.ViewModule,
-                                contentDesc = stringResource(R.string.soundcloud_cd_view_tiles),
+                            .padding(start = 8.dp, top = 10.dp, end = 12.dp)
+                            .heightIn(min = 56.dp),
+                    ) { inSelectionMode ->
+                        if (inSelectionMode) {
+                            SelectionActionRow(
+                                selectedCount = selectedSongs.size,
+                                onSelectAll = {
+                                    multiSelectionState.selectAll(uiState.downloads)
+                                },
+                                onDeselect = { multiSelectionState.clearSelection() },
+                                onOptionsClick = { showMultiSelectionSheet = true },
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            ToggleSegmentButton(
-                                modifier = Modifier.size(42.dp),
-                                active = !useTiles,
-                                activeColor = MaterialTheme.colorScheme.primary,
-                                inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
-                                activeContentColor = MaterialTheme.colorScheme.onPrimary,
-                                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                activeCornerRadius = 26.dp,
-                                onClick = { viewModel.setUseTiles(false) },
-                                imageVector = Icons.AutoMirrored.Rounded.ViewList,
-                                contentDesc = stringResource(R.string.soundcloud_cd_view_list),
+                        } else {
+                            LibraryActionRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                onMainActionClick = onShuffle,
+                                mainActionEnabled = canShuffle,
+                                iconRotation = 0f,
+                                onSortClick = {},
+                                showSortButton = false,
+                                isPlaylistTab = false,
+                                isFoldersTab = false,
+                                currentFolder = null,
+                                folderRootPath = "",
+                                folderRootLabel = "",
+                                onFolderClick = {},
+                                onNavigateBack = {},
+                                trailingContent = {
+                                    ToggleSegmentButton(
+                                        modifier = Modifier.size(42.dp),
+                                        active = useTiles,
+                                        activeColor = MaterialTheme.colorScheme.primary,
+                                        inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        activeContentColor = MaterialTheme.colorScheme.onPrimary,
+                                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        activeCornerRadius = 26.dp,
+                                        onClick = { viewModel.setUseTiles(true) },
+                                        imageVector = Icons.Rounded.ViewModule,
+                                        contentDesc = stringResource(R.string.soundcloud_cd_view_tiles),
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    ToggleSegmentButton(
+                                        modifier = Modifier.size(42.dp),
+                                        active = !useTiles,
+                                        activeColor = MaterialTheme.colorScheme.primary,
+                                        inactiveColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        activeContentColor = MaterialTheme.colorScheme.onPrimary,
+                                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        activeCornerRadius = 26.dp,
+                                        onClick = { viewModel.setUseTiles(false) },
+                                        imageVector = Icons.AutoMirrored.Rounded.ViewList,
+                                        contentDesc = stringResource(R.string.soundcloud_cd_view_list),
+                                    )
+                                },
                             )
-                        },
-                    )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -558,7 +651,16 @@ fun SoundCloudScreen(
                                 song = song,
                                 isCurrent = currentSongId == song.id,
                                 isPlaying = currentSongId == song.id && isPlaying,
+                                isSelectionMode = downloadsSelectionActive,
+                                isSelected = song.id in selectedSongIds,
+                                selectionIndex = if (downloadsSelectionActive) {
+                                    multiSelectionState.getSelectionIndex(song.id)
+                                } else {
+                                    null
+                                },
                                 onPlay = { onDownloadPlay(song) },
+                                onLongPress = { onDownloadLongPress(song) },
+                                onSelectionToggle = { onDownloadSelectionToggle(song) },
                             )
                         }
                     } else {
@@ -602,7 +704,21 @@ fun SoundCloudScreen(
                                 isCurrentSong = currentSongId == song.id,
                                 showMoreOptionsButton = false,
                                 onMoreOptionsClick = {},
-                                onClick = { onDownloadPlay(song) },
+                                isSelectionMode = downloadsSelectionActive,
+                                isSelected = song.id in selectedSongIds,
+                                selectionIndex = if (downloadsSelectionActive) {
+                                    multiSelectionState.getSelectionIndex(song.id)
+                                } else {
+                                    null
+                                },
+                                onLongPress = { onDownloadLongPress(song) },
+                                onClick = {
+                                    if (downloadsSelectionActive) {
+                                        onDownloadSelectionToggle(song)
+                                    } else {
+                                        onDownloadPlay(song)
+                                    }
+                                },
                             )
                         }
                     } else {
@@ -630,11 +746,113 @@ fun SoundCloudScreen(
                 color = MaterialTheme.colorScheme.primary,
             )
         }
+        if (downloadsSelectionActive && selectedSongs.isNotEmpty()) {
+            SelectionCountPill(
+                selectedCount = selectedSongs.size,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = MiniPlayerHeight + 24.dp)
+                    .zIndex(2f),
+            )
+        }
         } // Box (content + loading overlay)
                 } // Column (surface content)
             } // Surface
         } // header Column
     } // Scaffold
+
+    if (showMultiSelectionSheet && selectedSongs.isNotEmpty()) {
+        val activity = context as? android.app.Activity
+        MultiSelectionBottomSheet(
+            selectedSongs = selectedSongs,
+            favoriteSongIds = favoriteSongIds.toSet(),
+            onDismiss = { showMultiSelectionSheet = false },
+            onPlayAll = {
+                playerViewModel.playSelectedSongs(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onAddToQueue = {
+                playerViewModel.addSelectedToQueue(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onPlayNext = {
+                playerViewModel.addSelectedAsNext(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onAddToPlaylist = {
+                playlistSheetSongs = selectedSongs
+                showMultiSelectionSheet = false
+                showPlaylistBottomSheet = true
+            },
+            onToggleLikeAll = { shouldLike ->
+                if (shouldLike) {
+                    playerViewModel.likeSelectedSongs(selectedSongs)
+                } else {
+                    playerViewModel.unlikeSelectedSongs(selectedSongs)
+                }
+                showMultiSelectionSheet = false
+            },
+            onShareAll = {
+                playerViewModel.shareSelectedAsZip(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onDeleteAll = { _, onComplete ->
+                activity?.let {
+                    playerViewModel.deleteSelectedFromDevice(it, selectedSongs) {
+                        showMultiSelectionSheet = false
+                        viewModel.refreshDownloads()
+                        onComplete(true)
+                    }
+                }
+            },
+            onBatchEdit = {
+                showMultiSelectionSheet = false
+                showBatchEditSheet = true
+            },
+        )
+    }
+
+    if (showPlaylistBottomSheet && playlistSheetSongs.isNotEmpty()) {
+        val playlistUiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
+        PlaylistBottomSheet(
+            playlistUiState = playlistUiState,
+            songs = playlistSheetSongs,
+            onDismiss = {
+                showPlaylistBottomSheet = false
+                playlistSheetSongs = emptyList()
+            },
+            bottomBarHeight = bottomBarHeightDp,
+            playerViewModel = playerViewModel,
+            playlistViewModel = playlistViewModel,
+        )
+    }
+
+    if (showBatchEditSheet && selectedSongs.isNotEmpty()) {
+        EditMultipleSongsSheet(
+            visible = showBatchEditSheet,
+            songs = selectedSongs,
+            onDismiss = { showBatchEditSheet = false },
+            onSave = { songs, title, artist, album, albumArtist, composer, genre, lyrics, trackNumber, discNumber, replayGainTrackGainDb, replayGainAlbumGainDb, coverArtUpdate ->
+                playerViewModel.saveBatchMetadata(
+                    songs = songs,
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    albumArtist = albumArtist,
+                    composer = composer,
+                    genre = genre,
+                    lyrics = lyrics,
+                    trackNumber = trackNumber,
+                    discNumber = discNumber,
+                    replayGainTrackGainDb = replayGainTrackGainDb,
+                    replayGainAlbumGainDb = replayGainAlbumGainDb,
+                    coverArtUpdate = coverArtUpdate,
+                )
+                showBatchEditSheet = false
+                multiSelectionState.clearSelection()
+            },
+        )
+    }
 
     if (showSectionSwitcherSheet) {
         SoundCloudSectionSwitcherSheet(
@@ -904,11 +1122,23 @@ private fun SoundCloudSongTile(
     isCurrent: Boolean,
     isPlaying: Boolean,
     onPlay: () -> Unit,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    selectionIndex: Int? = null,
+    onLongPress: () -> Unit = {},
+    onSelectionToggle: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onPlay),
+            .pointerInput(isSelectionMode) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() },
+                    onTap = {
+                        if (isSelectionMode) onSelectionToggle() else onPlay()
+                    },
+                )
+            },
     ) {
         Box(
             modifier = Modifier
@@ -937,7 +1167,29 @@ private fun SoundCloudSongTile(
                     )
                 }
             }
-            if (isCurrent) {
+            if (isSelectionMode && isSelected) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = (selectionIndex ?: 1).toString(),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            } else if (isCurrent && !isSelectionMode) {
                 Surface(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
                     modifier = Modifier.fillMaxSize(),

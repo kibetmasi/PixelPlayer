@@ -432,7 +432,7 @@ class SoundCloudViewModel @Inject constructor(
         }
     }
 
-    private fun refreshDownloads() {
+    fun refreshDownloads() {
         val songs = downloader.listDownloadedSongs()
         _uiState.update {
             it.copy(
