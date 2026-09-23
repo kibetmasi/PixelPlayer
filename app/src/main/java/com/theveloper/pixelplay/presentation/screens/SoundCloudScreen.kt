@@ -202,7 +202,7 @@ fun SoundCloudScreen(
         start = 16.dp,
         end = 16.dp,
         top = 8.dp,
-        bottom = MiniPlayerHeight + 36.dp,
+        bottom = bottomBarHeightDp + MiniPlayerHeight + ListExtraBottomGap,
     )
     val currentSongId = stablePlayer.currentSong?.id
     val isPlaying = stablePlayer.isPlaying
@@ -751,7 +751,7 @@ fun SoundCloudScreen(
                 selectedCount = selectedSongs.size,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = MiniPlayerHeight + 24.dp)
+                    .padding(bottom = bottomBarHeightDp + MiniPlayerHeight + 16.dp)
                     .zIndex(2f),
             )
         }
