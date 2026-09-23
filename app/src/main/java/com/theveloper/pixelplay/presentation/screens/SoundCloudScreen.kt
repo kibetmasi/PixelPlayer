@@ -52,7 +52,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.DockedSearchBar
+import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -76,6 +77,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -384,26 +386,77 @@ fun SoundCloudScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    OutlinedTextField(
-                        value = uiState.query,
-                        onValueChange = viewModel::onQueryChange,
+                    val keyboardController = LocalSoftwareKeyboardController.current
+                    val searchBarCornerRadius = 28.dp
+                    val searchBarInputFieldColors = SearchBarDefaults.inputFieldColors(
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                    )
+                    DockedSearchBar(
+                        inputField = {
+                            SearchBarDefaults.InputField(
+                                query = uiState.query,
+                                onQueryChange = viewModel::onQueryChange,
+                                onSearch = { query ->
+                                    if (query.isNotBlank()) {
+                                        viewModel.onQueryChange(query)
+                                    }
+                                    keyboardController?.hide()
+                                },
+                                expanded = false,
+                                onExpandedChange = {},
+                                placeholder = {
+                                    Text(
+                                        stringResource(R.string.soundcloud_query_hint),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Search,
+                                        contentDescription = stringResource(R.string.search_cd_search_icon),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                },
+                                trailingIcon = {
+                                    if (uiState.query.isNotBlank()) {
+                                        IconButton(
+                                            onClick = { viewModel.onQueryChange("") },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
+                                                ),
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Close,
+                                                contentDescription = stringResource(R.string.search_cd_clear_search_query),
+                                                tint = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    }
+                                },
+                                colors = searchBarInputFieldColors,
+                            )
+                        },
+                        expanded = false,
+                        onExpandedChange = {},
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        singleLine = true,
-                        label = { Text(stringResource(R.string.soundcloud_query_label)) },
-                        placeholder = { Text(stringResource(R.string.soundcloud_query_hint)) },
-                        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (uiState.query.isNotEmpty()) {
-                                IconButton(onClick = { viewModel.onQueryChange("") }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = stringResource(R.string.common_clear_search),
-                                    )
-                                }
-                            }
-                        },
+                            .padding(horizontal = 16.dp)
+                            .clip(RoundedCornerShape(searchBarCornerRadius)),
+                        colors = SearchBarDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                            dividerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            inputFieldColors = searchBarInputFieldColors,
+                        ),
+                        content = {},
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -442,16 +495,11 @@ fun SoundCloudScreen(
             )
         }
 
-        if (uiState.isLoading && uiState.resolvingKey == null && !uiState.isRefreshing) {
-            LoadingIndicator(
-                modifier = Modifier
-                    .padding(24.dp)
-                    .size(48.dp)
-                    .align(Alignment.CenterHorizontally),
-            )
-        }
 
         val pullToRefreshState = rememberPullToRefreshState()
+        val showContentLoading =
+            uiState.isLoading && uiState.resolvingKey == null && !uiState.isRefreshing
+        Box(modifier = Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = uiState.isRefreshing,
             onRefresh = viewModel::refresh,
@@ -462,6 +510,8 @@ fun SoundCloudScreen(
                     state = pullToRefreshState,
                     isRefreshing = uiState.isRefreshing,
                     modifier = Modifier.align(Alignment.TopCenter),
+                    containerColor = Color.Transparent,
+                    elevation = 0.dp,
                 )
             },
         ) {
@@ -574,10 +624,19 @@ fun SoundCloudScreen(
                 }
             }
         }
-                }
-            }
+        if (showContentLoading) {
+            LoadingIndicator(
+                modifier = Modifier
+                    .size(48.dp)
+                    .align(Alignment.Center),
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
-    }
+        } // Box (content + loading overlay)
+                } // Column (surface content)
+            } // Surface
+        } // header Column
+    } // Scaffold
 
     if (showSectionSwitcherSheet) {
         SoundCloudSectionSwitcherSheet(
