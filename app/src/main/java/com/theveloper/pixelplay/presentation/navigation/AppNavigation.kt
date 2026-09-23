@@ -241,7 +241,6 @@ fun AppNavigation(
                     SoundCloudScreen(
                         playerViewModel = playerViewModel,
                         navController = navController,
-                        paddingValues = paddingValues,
                     )
                 }
             }

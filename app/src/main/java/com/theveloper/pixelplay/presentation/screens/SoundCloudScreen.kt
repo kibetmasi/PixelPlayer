@@ -120,7 +120,6 @@ private const val WIDE_SCREEN_DP = 600
 fun SoundCloudScreen(
     playerViewModel: PlayerViewModel,
     navController: NavController,
-    paddingValues: PaddingValues = PaddingValues(),
     viewModel: SoundCloudViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -232,7 +231,6 @@ fun SoundCloudScreen(
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .padding(paddingValues)
             .background(headerContainerColor),
         topBar = {
             Column(modifier = Modifier.background(headerContainerColor)) {
@@ -265,7 +263,7 @@ fun SoundCloudScreen(
                     actions = {
                         FilledIconButton(
                             modifier = Modifier.padding(end = 14.dp),
-                            onClick = { navController.navigateSafely(Screen.Settings.route) },
+                            onClick = { navController.navigateSafely(Screen.Experimental.route) },
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
