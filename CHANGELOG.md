@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0-soundcloud] - 2026-09-23
+
+### Added
+- **SoundCloud:** New main-tab SoundCloud experience with session sign-in, feed, discover, likes, tracks, playlists, and downloads.
+- **SoundCloud:** Always-on search, tiles/list view (wide defaults to tiles), shuffle play, pull-to-refresh, and playlist back navigation.
+- **SoundCloud:** Downloads shown as playable Library-style songs (MediaStore) with tile/list layouts.
+- **CI:** Conventional-commit lint (`commitlint`) for pushes and PR titles.
+- **CI:** `Release APK` workflow that builds phone release APKs and publishes a GitHub Release with feature notes from conventional commits.
+
+### Changed
+- **CI:** Phone-only focus — removed Wear OS APK workflow; CodeQL builds `:app` only.
+
+### Fixed
+- **SoundCloud:** Hilt/KSP crash from ViewModel default parameters (`Unexpected owner function: null`).
+- **SoundCloud:** Release compile OptIn for experimental Material3 loading indicators.
+
 ## [0.7.5-beta] - 2026-06-13
 
 ### Added
