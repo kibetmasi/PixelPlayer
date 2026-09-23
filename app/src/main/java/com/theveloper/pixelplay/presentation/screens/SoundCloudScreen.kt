@@ -939,22 +939,33 @@ private fun SoundCloudFeedHome(
                     fontWeight = FontWeight.ExtraBold,
                 )
                 if (useTiles) {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    val tileColumns = if (isWideScreen) 3 else 2
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        items(shelf.items, key = { "${shelf.id}:${it.url}" }) { hit ->
-                            Box(modifier = Modifier.width(176.dp)) {
-                                SoundCloudResultTile(
-                                    hit = hit,
-                                    enabled = enabled,
-                                    isResolving = resolvingKey == hit.url,
-                                    isLiked = hit.url in likedTrackUrls,
-                                    isLiking = likingUrl == hit.url,
-                                    onPlay = { onPlay(hit, shelf.items) },
-                                    onDownload = { onDownload(hit) },
-                                    onToggleLike = { onToggleLike(hit) },
-                                )
+                        shelf.items.chunked(tileColumns).forEach { rowHits ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                rowHits.forEach { hit ->
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        SoundCloudResultTile(
+                                            hit = hit,
+                                            enabled = enabled,
+                                            isResolving = resolvingKey == hit.url,
+                                            isLiked = hit.url in likedTrackUrls,
+                                            isLiking = likingUrl == hit.url,
+                                            onPlay = { onPlay(hit, shelf.items) },
+                                            onDownload = { onDownload(hit) },
+                                            onToggleLike = { onToggleLike(hit) },
+                                        )
+                                    }
+                                }
+                                repeat(tileColumns - rowHits.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
                             }
                         }
                     }

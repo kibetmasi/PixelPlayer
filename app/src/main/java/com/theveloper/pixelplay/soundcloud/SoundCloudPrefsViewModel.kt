@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,8 +44,9 @@ class SoundCloudPrefsViewModel @Inject constructor(
 
     fun saveSession(oauthToken: String, cookieHeader: String) {
         viewModelScope.launch {
+            val knownClientId = settings.clientId.first().ifBlank { clientId.value }
             client.setSession(oauthToken, cookieHeader)
-            sessionApi.updateSession(oauthToken, cookieHeader, clientId.value)
+            sessionApi.updateSession(oauthToken, cookieHeader, knownClientId.ifBlank { null })
             val profile = withContext(Dispatchers.IO) {
                 runCatching { sessionApi.fetchMe() }.getOrNull()
             }

@@ -96,8 +96,8 @@ class SoundCloudClient @Inject constructor(
             .filterIsInstance<StreamInfoItem>()
             .map { it.toHit() }
             .filter { it.url.isNotBlank() }
+            .take(limit)
             .toList()
-            .let { filterOutDrmTracks(it, limit) }
     }
 
     @Throws(Exception::class)
@@ -111,8 +111,8 @@ class SoundCloudClient @Inject constructor(
             .asSequence()
             .mapNotNull { it.toHitOrNull() }
             .filter { it.url.isNotBlank() }
+            .take(limit)
             .toList()
-            .let { filterOutDrmTracks(it, limit) }
     }
 
     @Throws(Exception::class)
@@ -130,28 +130,49 @@ class SoundCloudClient @Inject constructor(
     @Throws(Exception::class)
     fun loadPlaylistTracks(playlistUrl: String, limit: Int = 100): List<SoundCloudSearchHit> {
         ensureClientIdReady()
-        val info = PlaylistInfo.getInfo(soundCloud(), playlistUrl.trim())
-        return info.relatedItems
-            .asSequence()
-            .filterIsInstance<StreamInfoItem>()
-            .map { it.toHit() }
-            .filter { it.url.isNotBlank() }
-            .toList()
-            .let { filterOutDrmTracks(it, limit) }
+        try {
+            val info = PlaylistInfo.getInfo(soundCloud(), playlistUrl.trim())
+            return info.relatedItems
+                .asSequence()
+                .filterIsInstance<StreamInfoItem>()
+                .map { it.toHit() }
+                .filter { it.url.isNotBlank() }
+                .take(limit)
+                .toList()
+        } catch (t: Throwable) {
+            if (looksLikeClientIdOrRateLimit(t)) {
+                refreshClientIdFromWeb()
+                val info = PlaylistInfo.getInfo(soundCloud(), playlistUrl.trim())
+                return info.relatedItems
+                    .asSequence()
+                    .filterIsInstance<StreamInfoItem>()
+                    .map { it.toHit() }
+                    .filter { it.url.isNotBlank() }
+                    .take(limit)
+                    .toList()
+            }
+            throw wrapSoundCloudError(t, "Couldn't open this playlist")
+        }
     }
 
     @Throws(Exception::class)
     fun resolveTrack(url: String): SoundCloudResolvedTrack {
+        return try {
+            resolveTrackOnce(url)
+        } catch (t: Throwable) {
+            if (looksLikeClientIdOrRateLimit(t)) {
+                refreshClientIdFromWeb()
+                resolveTrackOnce(url)
+            } else {
+                throw wrapSoundCloudError(t, "No playable stream")
+            }
+        }
+    }
+
+    private fun resolveTrackOnce(url: String): SoundCloudResolvedTrack {
         ensureClientIdReady()
         val trimmedUrl = url.trim()
-        val info = try {
-            StreamInfo.getInfo(soundCloud(), trimmedUrl)
-        } catch (t: Throwable) {
-            throw IllegalStateException(
-                "No playable stream (often DRM encrypted-hls). Try another track. ${t.message}",
-                t,
-            )
-        }
+        val info = StreamInfo.getInfo(soundCloud(), trimmedUrl)
         val stream = pickBestAudioStream(info.audioStreams)
             ?: throw IllegalStateException(
                 "No progressive/plain stream available. DRM-protected tracks can't be played or downloaded.",
@@ -222,31 +243,30 @@ class SoundCloudClient @Inject constructor(
             .asSequence()
             .mapNotNull { it.toHitOrNull() }
             .filter { it.url.isNotBlank() }
+            .take(limit)
             .toList()
-            .let { filterOutDrmTracks(it, limit) }
     }
 
     /**
-     * Drop DRM-only tracks (encrypted-hls with no progressive/plain stream).
-     * Playlists are kept; unknown resolve failures keep the row (avoid over-hiding).
+     * Scrapes a fresh web client_id via NewPipe and injects it.
+     * Call when prefs are empty or the cached id has stopped working.
      */
-    private fun filterOutDrmTracks(
-        hits: List<SoundCloudSearchHit>,
-        limit: Int,
-    ): List<SoundCloudSearchHit> {
-        if (hits.isEmpty()) return hits
-        val out = ArrayList<SoundCloudSearchHit>(minOf(hits.size, limit))
-        for (hit in hits) {
-            if (out.size >= limit) break
-            if (hit.kind == SoundCloudSearchHit.Kind.PLAYLIST) {
-                out.add(hit)
-                continue
-            }
-            if (!sessionApi.isDrmOnlyUrl(hit.url)) {
-                out.add(hit)
-            }
+    @Throws(Exception::class)
+    fun refreshClientIdFromWeb(): String {
+        clearInjectedClientId()
+        val scraped = try {
+            SoundcloudParsingHelper.clientId()
+        } catch (t: Throwable) {
+            throw IllegalStateException(
+                "Couldn't auto-fetch SoundCloud client_id. Paste one in Settings → Experimental. (${t.message})",
+                t,
+            )
         }
-        return out
+        val trimmed = scraped.trim()
+        require(trimmed.isNotEmpty()) { "SoundCloud returned an empty client_id" }
+        setClientIdOverride(trimmed)
+        Timber.i("SoundCloud: refreshed client_id from web")
+        return trimmed
     }
 
     private fun InfoItem.toHitOrNull(): SoundCloudSearchHit? = when (this) {
@@ -273,11 +293,23 @@ class SoundCloudClient @Inject constructor(
     )
 
     private fun ensureClientIdReady() {
-        val id = runtimeClientId.get()?.trim().orEmpty()
+        var id = runtimeClientId.get()?.trim().orEmpty()
         if (id.isEmpty()) {
-            throw IllegalStateException("Set SoundCloud client_id in Settings → Experimental")
+            id = refreshClientIdFromWeb()
         }
         injectClientId(id)
+    }
+
+    private fun clearInjectedClientId() {
+        try {
+            val field = SoundcloudParsingHelper::class.java.getDeclaredField("clientId")
+            field.isAccessible = true
+            synchronized(SoundcloudParsingHelper::class.java) {
+                field.set(null, null)
+            }
+        } catch (t: Throwable) {
+            Timber.w(t, "SoundCloud: could not clear injected client_id")
+        }
     }
 
     private fun injectClientId(clientId: String) {
@@ -290,6 +322,35 @@ class SoundCloudClient @Inject constructor(
         } catch (t: Throwable) {
             throw IllegalStateException("Could not inject SoundCloud client_id: ${t.message}", t)
         }
+    }
+
+    private fun looksLikeClientIdOrRateLimit(t: Throwable): Boolean {
+        val msg = generateSequence(t) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+            .lowercase()
+        return msg.contains("clientid") ||
+            msg.contains("client_id") ||
+            msg.contains("client id") ||
+            msg.contains("rate limited") ||
+            msg.contains("429") ||
+            msg.contains("recaptcha")
+    }
+
+    private fun wrapSoundCloudError(t: Throwable, prefix: String): IllegalStateException {
+        val msg = generateSequence(t) { it.cause }
+            .mapNotNull { it.message }
+            .firstOrNull { it.isNotBlank() }
+            .orEmpty()
+        val friendly = when {
+            msg.contains("429", ignoreCase = true) ||
+                msg.contains("rate limited", ignoreCase = true) ->
+                "$prefix: SoundCloud rate-limited you. Wait a bit and try again."
+            msg.contains("client", ignoreCase = true) ->
+                "$prefix: client_id missing/expired. Open Settings → Experimental and save a fresh client_id (or retry)."
+            else -> "$prefix. $msg"
+        }
+        return IllegalStateException(friendly, t)
     }
 
     private fun pickBestAudioStream(streams: List<AudioStream>): AudioStream? {

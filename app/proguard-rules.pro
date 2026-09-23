@@ -221,6 +221,11 @@
 -dontwarn org.mozilla.javascript.XMLLib
 -dontwarn org.schabi.newpipe.extractor.**
 
+# SoundCloud client_id is injected reflectively into NewPipe.
+-keepclassmembers class org.schabi.newpipe.extractor.services.soundcloud.SoundcloudParsingHelper {
+    static java.lang.String clientId;
+}
+
 # Rhino / NewPipe optional JDK APIs not on Android
 -dontwarn org.mozilla.javascript.**
 -dontwarn javax.script.**

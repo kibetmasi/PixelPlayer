@@ -206,8 +206,7 @@ class SoundCloudSessionApi @Inject constructor() {
             durationSec = (durationMs / 1000L).coerceAtLeast(0L),
             thumbnailUrl = track.optString("artwork_url")
                 .ifBlank { user?.optString("avatar_url").orEmpty() }
-                .replace("-large", "-t500x500")
-                .takeIf { it.isNotBlank() },
+                .let { if (it.isBlank()) null else upgradeArtworkUrl(it) },
             kind = SoundCloudSearchHit.Kind.TRACK,
         )
     }
@@ -215,18 +214,36 @@ class SoundCloudSessionApi @Inject constructor() {
     private fun playlistToHit(playlist: JSONObject): SoundCloudSearchHit? {
         val url = playlist.optString("permalink_url").ifBlank { return null }
         val user = playlist.optJSONObject("user")
+        val firstTrackArt = playlist.optJSONArray("tracks")
+            ?.optJSONObject(0)
+            ?.optString("artwork_url")
+            .orEmpty()
+        val art = sequenceOf(
+            playlist.optString("artwork_url"),
+            playlist.optString("calculated_artwork_url"),
+            firstTrackArt,
+            user?.optString("avatar_url").orEmpty(),
+        )
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?.let { upgradeArtworkUrl(it) }
         return SoundCloudSearchHit(
             url = url,
             title = playlist.optString("title").ifBlank { "Playlist" },
             artist = user?.optString("username").orEmpty().ifBlank { "SoundCloud" },
             durationSec = 0,
-            thumbnailUrl = playlist.optString("artwork_url")
-                .ifBlank { user?.optString("avatar_url").orEmpty() }
-                .replace("-large", "-t500x500")
-                .takeIf { it.isNotBlank() },
+            thumbnailUrl = art,
             kind = SoundCloudSearchHit.Kind.PLAYLIST,
             streamCount = playlist.optLong("track_count", 0L).coerceAtLeast(0L),
         )
+    }
+
+    private fun upgradeArtworkUrl(url: String): String {
+        return url
+            .replace("-large.", "-t500x500.")
+            .replace("-t200x200.", "-t500x500.")
+            .replace("-t67x67.", "-t500x500.")
+            .replace("-badge.", "-t500x500.")
     }
 
     /**

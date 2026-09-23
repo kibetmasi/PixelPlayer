@@ -5,7 +5,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
-import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -31,7 +30,7 @@ internal class SoundCloudDownloader : Downloader() {
         .followSslRedirects(true)
         .build()
 
-    @Throws(IOException::class, ReCaptchaException::class)
+    @Throws(IOException::class)
     override fun execute(request: Request): Response {
         val bodyBytes = request.dataToSend()
         val requestBody = bodyBytes?.toRequestBody(null)
@@ -58,7 +57,7 @@ internal class SoundCloudDownloader : Downloader() {
 
         client.newCall(builder.build()).execute().use { response ->
             if (response.code == 429) {
-                throw ReCaptchaException("Rate limited / challenge requested", request.url())
+                throw IOException("SoundCloud rate limited (HTTP 429). Wait a moment and try again.")
             }
             val responseBody = response.body.string()
             return Response(

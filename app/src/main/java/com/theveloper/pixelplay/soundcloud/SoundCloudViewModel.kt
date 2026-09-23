@@ -98,11 +98,9 @@ class SoundCloudViewModel @Inject constructor(
         viewModelScope.launch {
             delay(350)
             val state = _uiState.value
-            if (state.clientId.isNotBlank()) {
-                selectSection(
-                    if (state.isSignedIn) SoundCloudSection.FEED else SoundCloudSection.DISCOVER,
-                )
-            }
+            selectSection(
+                if (state.isSignedIn) SoundCloudSection.FEED else SoundCloudSection.DISCOVER,
+            )
         }
     }
 
@@ -289,7 +287,7 @@ class SoundCloudViewModel @Inject constructor(
         setBusy(startHit.url)
         val resolved = withContext(Dispatchers.IO) {
             ensureClient()
-            val gate = Semaphore(4)
+            val gate = Semaphore(2)
             coroutineScope {
                 candidates.map { hit ->
                     async {
@@ -333,7 +331,7 @@ class SoundCloudViewModel @Inject constructor(
         setBusy()
         return withContext(Dispatchers.IO) {
             ensureClient()
-            val gate = Semaphore(4)
+            val gate = Semaphore(2)
             coroutineScope {
                 tracks.map { hit ->
                     async {
@@ -728,9 +726,13 @@ class SoundCloudViewModel @Inject constructor(
         }
     }
 
-    private fun ensureClient() {
-        val id = _uiState.value.clientId
-        if (id.isBlank()) throw IllegalStateException("Set client_id in Settings → Experimental")
+    private suspend fun ensureClient() {
+        var id = _uiState.value.clientId.trim()
+        if (id.isBlank()) {
+            id = withContext(Dispatchers.IO) { client.refreshClientIdFromWeb() }
+            settings.setClientId(id)
+            _uiState.update { it.copy(clientId = id) }
+        }
         client.setClientIdOverride(id)
     }
 
