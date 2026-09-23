@@ -1,9 +1,15 @@
 name: Release APK
 
 # Builds a signed (CI keystore) release APK and publishes a GitHub Release with
-# conventional-commit feature notes. Triggered by version tags or manually.
+# conventional-commit notes + downloadable APKs.
+#
+# Triggers:
+# - Every push to master → continuous pre-release (auto tag + changelog)
+# - Version tags (v*) → release for that tag
+# - Manual workflow_dispatch → named version (e.g. 0.8.1-soundcloud)
 on:
   push:
+    branches: [ master ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -22,8 +28,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-apk-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -43,17 +49,35 @@ jobs:
         id: meta
         shell: bash
         run: |
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
             VERSION="${VERSION#v}"
             TAG="v${VERSION}"
-          else
+            PRERELEASE="${{ inputs.prerelease }}"
+            TITLE="PixelPlayer ${VERSION}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
             TAG="${GITHUB_REF_NAME}"
             VERSION="${TAG#v}"
+            # Tag releases with a dash (e.g. 0.8.1-soundcloud) stay pre-release.
+            if [[ "${VERSION}" == *-* ]]; then
+              PRERELEASE="true"
+            else
+              PRERELEASE="false"
+            fi
+            TITLE="PixelPlayer ${VERSION}"
+          else
+            # Continuous build on every master push — browseable on the Releases page.
+            VERSION="continuous-$(date -u +%Y%m%d)-${SHORT_SHA}"
+            TAG="v${VERSION}"
+            PRERELEASE="true"
+            TITLE="PixelPlayer continuous (${SHORT_SHA})"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Resolved release ${TAG}"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release ${TAG} (prerelease=${PRERELEASE})"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -166,14 +190,19 @@ jobs:
               return `### ${title}\n\n${items.map((i) => `- ${i}`).join('\n')}\n\n`;
             };
 
-            let body = `## PixelPlayer ${version}\n\n`;
-            body += section('Features', buckets.feat);
-            body += section('Fixes', buckets.fix);
-            body += section('Performance', buckets.perf);
-            body += section('Refactors', buckets.refactor);
-            body += section('Docs', buckets.docs);
-            body += section('Chores', buckets.chore);
-            body += section('Other', buckets.other);
+            let body = `## ${process.env.RELEASE_TITLE || `PixelPlayer ${version}`}\n\n`;
+            if (version.startsWith('continuous-')) {
+              body += '_Automatic build from `master`. Use a manual / tagged release for stable version numbers._\n\n';
+            }
+            const typed =
+              section('Features', buckets.feat) +
+              section('Fixes', buckets.fix) +
+              section('Performance', buckets.perf) +
+              section('Refactors', buckets.refactor) +
+              section('Docs', buckets.docs) +
+              section('Chores', buckets.chore) +
+              section('Other', buckets.other);
+            body += typed || '_No conventional commits in this range._\n\n';
             body += [
               '### Downloads',
               '',
@@ -186,15 +215,19 @@ jobs:
 
             core.setOutput('body', body);
             await core.summary.addHeading(`Release ${tag}`).addRaw(body).write();
+        env:
+          RELEASE_TITLE: ${{ steps.meta.outputs.title }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: PixelPlayer ${{ steps.meta.outputs.version }}
+          name: ${{ steps.meta.outputs.title }}
           body: ${{ steps.notes.outputs.body }}
+          target_commitish: ${{ github.sha }}
           draft: false
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || contains(steps.meta.outputs.version, '-') }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.meta.outputs.prerelease != 'true' }}
           files: |
             dist/PixelPlayer-${{ steps.meta.outputs.version }}-arm64-v8a.apk
             dist/PixelPlayer-${{ steps.meta.outputs.version }}-armeabi-v7a.apk
