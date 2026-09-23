@@ -405,9 +405,10 @@ class MusicService : MediaLibraryService() {
         val existingHandler = Thread.currentThread().uncaughtExceptionHandler
         previousMainThreadExceptionHandler = existingHandler
         Thread.currentThread().setUncaughtExceptionHandler { thread, throwable ->
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                throwable is ForegroundServiceStartNotAllowedException
-            ) {
+            val isFgsDenied = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                generateSequence(throwable) { it.cause }
+                    .any { it is ForegroundServiceStartNotAllowedException }
+            if (isFgsDenied) {
                 Timber.tag(TAG).w(throwable, "Suppressed ForegroundServiceStartNotAllowedException from Media3/Cast internal path")
             } else {
                 existingHandler?.uncaughtException(thread, throwable)
@@ -1055,6 +1056,7 @@ class MusicService : MediaLibraryService() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             )
         } catch (e: Exception) {
+            // Includes ForegroundServiceStartNotAllowedException on API 31+.
             Timber.tag(TAG).w(e, "Failed to promote service to foreground for external command")
         }
     }
@@ -1175,10 +1177,31 @@ class MusicService : MediaLibraryService() {
                 }
             }
         }
-        val startCommandResult = super.onStartCommand(intent, flags, startId)
+        val startCommandResult = try {
+            super.onStartCommand(intent, flags, startId)
+        } catch (e: Exception) {
+            // Android 12+: Media3 may call startForeground() from onStartCommand while the app
+            // is cached/backgrounded (widget/media-button/system restart). That throws
+            // ForegroundServiceStartNotAllowedException and kills the process if uncaught.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                e is ForegroundServiceStartNotAllowedException
+            ) {
+                Timber.tag(TAG).w(
+                    e,
+                    "super.onStartCommand startForeground denied; continuing without FGS promote"
+                )
+                START_STICKY
+            } else {
+                throw e
+            }
+        }
         if (needsTemporaryForeground || startedTemporaryForegroundInOnCreate) {
             if (mediaSession?.player?.hasForegroundPlaybackIntent() != true) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "stopForeground after temporary FGS failed")
+                }
                 if (needsTemporaryForeground) {
                     stopSelfResult(startId)
                 }
