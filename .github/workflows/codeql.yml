@@ -1,10 +1,7 @@
 name: "CodeQL Advanced"
 
+# Weekly + manual only — avoid a full Gradle rebuild on every master push.
 on:
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
   workflow_dispatch:
   schedule:
     - cron: '25 15 * * 0'

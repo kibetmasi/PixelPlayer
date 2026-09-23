@@ -1,5 +1,6 @@
 name: Commit Lint (Semantic)
 
+# Keep this — cheap and useful. Runs on push/PR; not an APK build.
 on:
   push:
     branches: [master, 'feat/**', 'fix/**', 'chore/**', 'ci/**']
