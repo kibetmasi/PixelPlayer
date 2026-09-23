@@ -70,7 +70,8 @@ jobs:
             # Continuous build on every master push — browseable on the Releases page.
             VERSION="continuous-$(date -u +%Y%m%d)-${SHORT_SHA}"
             TAG="v${VERSION}"
-            PRERELEASE="true"
+            # Keep as a full release so /releases/latest always points here.
+            PRERELEASE="false"
             TITLE="PixelPlayer continuous (${SHORT_SHA})"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -203,13 +204,20 @@ jobs:
               section('Chores', buckets.chore) +
               section('Other', buckets.other);
             body += typed || '_No conventional commits in this range._\n\n';
+            const repo = process.env.GITHUB_REPOSITORY;
+            const arm64Name = `PixelPlayer-${version}-arm64-v8a.apk`;
+            const armName = `PixelPlayer-${version}-armeabi-v7a.apk`;
+            const arm64Url = `https://github.com/${repo}/releases/download/${tag}/${arm64Name}`;
+            const armUrl = `https://github.com/${repo}/releases/download/${tag}/${armName}`;
             body += [
               '### Downloads',
               '',
-              '- `PixelPlayer-*-arm64-v8a.apk` — modern 64-bit devices (recommended)',
-              '- `PixelPlayer-*-armeabi-v7a.apk` — older 32-bit devices',
+              `- [${arm64Name}](${arm64Url}) — modern 64-bit devices (recommended)`,
+              `- [${armName}](${armUrl}) — older 32-bit devices`,
               '',
               '> CI builds use the repository CI keystore (not the store/Play signing key).',
+              '',
+              'You can also expand **Assets** below on this release page.',
               '',
             ].join('\n');
 
