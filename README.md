@@ -59,9 +59,9 @@ Do this on a computer (Chrome / Edge / Firefox):
 4. In the filter box, type: `client_id`
 5. Click around or pause/play so new requests appear.
 6. Click a request to SoundCloud’s API — for example:
-   `https://api-v2.soundcloud.com/me?client_id=Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo`
-7. Copy the long value after `client_id=` (in the example above: `Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo`).  
-   Yours will look similar but may be different, and it can change over time.
+   `https://api-v2.soundcloud.com/me?client_id=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+7. Copy the long value after `client_id=` (a string of letters and numbers).  
+   Yours will look similar but different, and it can change over time.
 
 <p align="center">
   <img src="assets/soundcloud-devtools-request.png" alt="Chrome DevTools Network tab showing api-v2.soundcloud.com/me?client_id=…" width="720"/>
