@@ -16,6 +16,7 @@ import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -33,6 +34,12 @@ class SoundCloudClient @Inject constructor(
 ) {
     private val downloader = SoundCloudDownloader()
     private val runtimeClientId = AtomicReference<String?>(null)
+    private val resolveCache = ConcurrentHashMap<String, CachedResolve>()
+
+    private data class CachedResolve(
+        val track: SoundCloudResolvedTrack,
+        val cachedAtMs: Long,
+    )
 
     init {
         ensureInitialized(downloader)
@@ -157,16 +164,23 @@ class SoundCloudClient @Inject constructor(
 
     @Throws(Exception::class)
     fun resolveTrack(url: String): SoundCloudResolvedTrack {
-        return try {
-            resolveTrackOnce(url)
+        val key = url.trim()
+        resolveCache[key]?.takeIf {
+            System.currentTimeMillis() - it.cachedAtMs < RESOLVE_CACHE_TTL_MS
+        }?.let { return it.track }
+
+        val resolved = try {
+            resolveTrackOnce(key)
         } catch (t: Throwable) {
             if (looksLikeClientIdOrRateLimit(t)) {
                 refreshClientIdFromWeb()
-                resolveTrackOnce(url)
+                resolveTrackOnce(key)
             } else {
                 throw wrapSoundCloudError(t, "No playable stream")
             }
         }
+        resolveCache[key] = CachedResolve(resolved, System.currentTimeMillis())
+        return resolved
     }
 
     private fun resolveTrackOnce(url: String): SoundCloudResolvedTrack {
@@ -356,20 +370,33 @@ class SoundCloudClient @Inject constructor(
 
     private fun pickBestAudioStream(streams: List<AudioStream>): AudioStream? {
         if (streams.isEmpty()) return null
+        // Progressive HTTP starts fastest (single file). Prefer it over HLS when available.
         val progressive = streams.filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
-        val pool = progressive.ifEmpty {
-            streams.filter { it.deliveryMethod != DeliveryMethod.HLS || !it.content.contains("encrypted") }
-                .ifEmpty { streams }
+        if (progressive.isNotEmpty()) {
+            return progressive.maxWithOrNull(
+                compareBy<AudioStream> { it.averageBitrate }.thenBy { it.bitrate },
+            )
         }
-        return pool.maxWithOrNull(
-            compareBy<AudioStream> { it.averageBitrate }.thenBy { it.bitrate },
-        )
+        // Plain HLS only — skip encrypted/DRM. Prefer a mid/low bitrate for quicker first buffer.
+        val hls = streams.filter {
+            it.deliveryMethod == DeliveryMethod.HLS && !it.content.contains("encrypted")
+        }
+        if (hls.isNotEmpty()) {
+            return hls.minWithOrNull(
+                compareBy<AudioStream> {
+                    val br = it.averageBitrate.takeIf { b -> b > 0 } ?: it.bitrate
+                    if (br > 0) br else Int.MAX_VALUE
+                },
+            ) ?: hls.first()
+        }
+        return streams.firstOrNull { !it.content.contains("encrypted") } ?: streams.firstOrNull()
     }
 
     private fun soundCloud(): SoundcloudService = ServiceList.SoundCloud
 
     companion object {
         private val initialized = AtomicBoolean(false)
+        private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
 
         fun songIdForUrl(url: String): String =
             "sc_${url.trim().hashCode().toUInt()}"

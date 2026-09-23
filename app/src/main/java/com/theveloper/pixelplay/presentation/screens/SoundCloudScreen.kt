@@ -224,13 +224,17 @@ fun SoundCloudScreen(
             } else {
                 scope.launch {
                     try {
-                        val (songs, startSong) = viewModel.resolveQueueForPlayback(hit, queueHits)
+                        // Resolve only the tapped track — don't wait on the whole list.
+                        val startSong = viewModel.resolveStartForPlayback(hit)
                         playerViewModel.playSongs(
-                            songsToPlay = songs,
+                            songsToPlay = listOf(startSong),
                             startSong = startSong,
                             queueName = "SoundCloud",
                         )
                         viewModel.setIdle()
+                        viewModel.prefetchQueueAfter(hit, queueHits) { song ->
+                            playerViewModel.addSongToQueue(song)
+                        }
                     } catch (t: Throwable) {
                         viewModel.setIdle(error = t.message ?: t::class.java.simpleName)
                     }
@@ -261,17 +265,19 @@ fun SoundCloudScreen(
                         startAtZero = true,
                     )
                 } else {
-                    val songs = viewModel.resolveTracksForPlayback()
-                    if (songs.isEmpty()) return@launch
+                    val (startSong, remaining) = viewModel.resolveShuffleStart()
                     val queueName = uiState.browsingPlaylistTitle
                         ?.let { "SoundCloud · $it" }
                         ?: "SoundCloud · ${uiState.section.name.lowercase().replaceFirstChar { it.titlecase() }}"
                     playerViewModel.playSongsShuffled(
-                        songsToPlay = songs,
+                        songsToPlay = listOf(startSong),
                         queueName = queueName,
                         startAtZero = true,
                     )
                     viewModel.setIdle()
+                    viewModel.prefetchHits(remaining) { song ->
+                        playerViewModel.addSongToQueue(song)
+                    }
                 }
             } catch (t: Throwable) {
                 viewModel.setIdle(error = t.message ?: t::class.java.simpleName)

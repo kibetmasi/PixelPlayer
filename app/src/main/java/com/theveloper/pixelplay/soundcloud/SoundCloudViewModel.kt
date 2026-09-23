@@ -5,17 +5,13 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import com.theveloper.pixelplay.data.model.Song
@@ -69,6 +65,7 @@ class SoundCloudViewModel @Inject constructor(
     private var searchJob: Job? = null
     private var loadJob: Job? = null
     private var artworkJob: Job? = null
+    private var queuePrefetchJob: Job? = null
     private val artworkAttempts = mutableSetOf<String>()
     private val navStack = ArrayDeque<NavFrame>()
 
@@ -270,56 +267,46 @@ class SoundCloudViewModel @Inject constructor(
     }
 
     /**
-     * Builds an ordered queue around the selected track so normal player completion advances
-     * to the next playable SoundCloud track. Unplayable/DRM entries are skipped.
+     * Resolves only the tapped track so playback can start immediately.
+     * Call [prefetchQueueAfter] afterward to fill upcoming songs without blocking.
      */
-    suspend fun resolveQueueForPlayback(
-        startHit: SoundCloudSearchHit,
-        queueHits: List<SoundCloudSearchHit>,
-        limit: Int = 40,
-    ): Pair<List<Song>, Song> {
-        val candidates = (listOf(startHit) + queueHits)
-            .asSequence()
-            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
-            .distinctBy { it.url }
-            .take(limit)
-            .toList()
-        setBusy(startHit.url)
-        val resolved = withContext(Dispatchers.IO) {
+    suspend fun resolveStartForPlayback(hit: SoundCloudSearchHit): Song {
+        setBusy(hit.url)
+        return withContext(Dispatchers.IO) {
             ensureClient()
-            val gate = Semaphore(2)
-            coroutineScope {
-                candidates.map { hit ->
-                    async {
-                        gate.withPermit {
-                            runCatching { hit to client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url) }
-                                .onFailure { Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url) }
-                                .getOrNull()
-                        }
-                    }
-                }.awaitAll().filterNotNull()
-            }
+            client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
         }
-        val startSong = resolved.firstOrNull { it.first.url == startHit.url }?.second
-            ?: throw IllegalStateException("This SoundCloud track has no playable stream")
-        val songsByUrl = resolved.associate { it.first.url to it.second }
-        val orderedSongs = queueHits
-            .asSequence()
-            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
-            .mapNotNull { songsByUrl[it.url] }
-            .distinctBy { it.id }
-            .toMutableList()
-            .apply {
-                if (none { it.id == startSong.id }) add(0, startSong)
-            }
-        return orderedSongs to startSong
     }
 
     /**
-     * Resolves playable tracks from the current results list for shuffle/queue playback.
-     * Skips playlists and tracks that fail to resolve (e.g. DRM).
+     * Background-resolves tracks after [startHit] in list order and invokes [onSong]
+     * for each success (typically to append to the player queue).
      */
-    suspend fun resolveTracksForPlayback(limit: Int = 30): List<Song> {
+    fun prefetchQueueAfter(
+        startHit: SoundCloudSearchHit,
+        queueHits: List<SoundCloudSearchHit>,
+        limit: Int = 24,
+        onSong: (Song) -> Unit,
+    ) {
+        val tracks = queueHits
+            .asSequence()
+            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
+            .distinctBy { it.url }
+            .toList()
+        val startIndex = tracks.indexOfFirst { it.url == startHit.url }
+        val following = if (startIndex >= 0) {
+            tracks.drop(startIndex + 1).take(limit)
+        } else {
+            tracks.filter { it.url != startHit.url }.take(limit)
+        }
+        prefetchHits(following, onSong)
+    }
+
+    /**
+     * Resolves the first playable track quickly so shuffle can start immediately.
+     * Prefetch the rest with [prefetchHits] after calling play.
+     */
+    suspend fun resolveShuffleStart(limit: Int = 30): Pair<Song, List<SoundCloudSearchHit>> {
         val tracks = _uiState.value.results
             .asSequence()
             .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
@@ -328,27 +315,48 @@ class SoundCloudViewModel @Inject constructor(
         if (tracks.isEmpty()) {
             throw IllegalStateException("No tracks to play — open a playlist or pick a feed with songs")
         }
-        setBusy()
-        return withContext(Dispatchers.IO) {
+        setBusy(tracks.first().url)
+        val startSong = withContext(Dispatchers.IO) {
             ensureClient()
-            val gate = Semaphore(2)
-            coroutineScope {
-                tracks.map { hit ->
-                    async {
-                        gate.withPermit {
-                            try {
-                                client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
-                            } catch (t: Throwable) {
-                                Timber.w(t, "Skip unplayable SoundCloud track: %s", hit.url)
-                                null
-                            }
-                        }
-                    }
-                }.awaitAll().filterNotNull()
+            var first: Song? = null
+            for (hit in tracks) {
+                runCatching {
+                    client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
+                }.onSuccess { song ->
+                    first = song
+                }.onFailure { Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url) }
+                if (first != null) break
             }
-        }.also { songs ->
-            if (songs.isEmpty()) {
-                setIdle(error = "No playable streams in this list")
+            first ?: throw IllegalStateException("No playable streams in this list")
+        }
+        val remaining = tracks.filter { SoundCloudClient.songIdForUrl(it.url) != startSong.id }
+        return startSong to remaining
+    }
+
+    /**
+     * Background-resolves [hits] and invokes [onSong] for each success.
+     * Call after playback has started so songs append to the new queue.
+     */
+    fun prefetchHits(
+        hits: List<SoundCloudSearchHit>,
+        onSong: (Song) -> Unit,
+    ) {
+        if (hits.isEmpty()) return
+        queuePrefetchJob?.cancel()
+        queuePrefetchJob = viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                ensureClient()
+                for (hit in hits) {
+                    ensureActive()
+                    if (hit.kind != SoundCloudSearchHit.Kind.TRACK) continue
+                    runCatching {
+                        client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
+                    }.onSuccess { song ->
+                        withContext(Dispatchers.Main.immediate) { onSong(song) }
+                    }.onFailure {
+                        Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url)
+                    }
+                }
             }
         }
     }
