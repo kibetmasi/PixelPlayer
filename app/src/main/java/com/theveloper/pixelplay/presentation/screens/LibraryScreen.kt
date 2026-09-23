@@ -2175,7 +2175,7 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun CompactLibraryPagerIndicator(
+internal fun CompactLibraryPagerIndicator(
     currentIndex: Int,
     pageCount: Int,
     modifier: Modifier = Modifier

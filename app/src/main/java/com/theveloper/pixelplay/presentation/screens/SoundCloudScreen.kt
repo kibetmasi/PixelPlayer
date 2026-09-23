@@ -105,6 +105,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
+import com.theveloper.pixelplay.data.preferences.LibraryNavigationMode
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 
 /** Material medium width — foldables / tablets / landscape. */
 private const val WIDE_SCREEN_DP = 600
@@ -123,6 +128,10 @@ fun SoundCloudScreen(
         SoundCloudSection.entries.filter { it != SoundCloudSection.SEARCH }
     }
     val selectedIndex = sections.indexOf(uiState.section).let { if (it < 0) -1 else it }
+    val libraryNavigationMode by playerViewModel.libraryNavigationMode.collectAsStateWithLifecycle()
+    val isCompactNavigation = libraryNavigationMode == LibraryNavigationMode.COMPACT_PILL
+    var showSectionSwitcherSheet by remember { mutableStateOf(false) }
+    val currentSection = if (selectedIndex >= 0) sections[selectedIndex] else SoundCloudSection.FEED
     val configuration = LocalConfiguration.current
     val isWideScreen = configuration.screenWidthDp >= WIDE_SCREEN_DP
     val useTiles = uiState.tilesOverride ?: isWideScreen
@@ -227,20 +236,34 @@ fun SoundCloudScreen(
             Column(modifier = Modifier.background(headerContainerColor)) {
                 TopAppBar(
                     title = {
-                        Text(
-                            modifier = Modifier.padding(start = 8.dp),
-                            text = stringResource(R.string.soundcloud_tab_title),
-                            fontFamily = GoogleSansRounded,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontSize = 40.sp,
-                            letterSpacing = 1.sp,
-                        )
+                        if (isCompactNavigation) {
+                            LibraryNavigationPill(
+                                modifier = Modifier,
+                                title = stringResource(currentSection.labelRes),
+                                isExpanded = showSectionSwitcherSheet,
+                                showIcon = true,
+                                iconRes = currentSection.iconRes,
+                                pageIndex = selectedIndex.coerceAtLeast(0),
+                                compressForWatchTransfer = false,
+                                onClick = { showSectionSwitcherSheet = true },
+                                onArrowClick = { showSectionSwitcherSheet = true },
+                            )
+                        } else {
+                            Text(
+                                modifier = Modifier.padding(start = 8.dp),
+                                text = stringResource(R.string.soundcloud_tab_title),
+                                fontFamily = GoogleSansRounded,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 40.sp,
+                                letterSpacing = 1.sp,
+                            )
+                        }
                     },
                     actions = {
                         FilledIconButton(
                             modifier = Modifier.padding(end = 14.dp),
-                            onClick = { navController.navigateSafely(Screen.Experimental.route) },
+                            onClick = { navController.navigateSafely(Screen.Settings.route) },
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -258,28 +281,36 @@ fun SoundCloudScreen(
                     ),
                 )
 
-                PrimaryScrollableTabRow(
-                    selectedTabIndex = selectedIndex.coerceAtLeast(0),
-                    containerColor = Color.Transparent,
-                    edgePadding = 12.dp,
-                    indicator = {},
-                    divider = {},
-                ) {
-                    sections.forEachIndexed { index, section ->
-                        TabAnimation(
-                            index = index,
-                            title = section.name,
-                            selectedIndex = if (selectedIndex < 0) -1 else selectedIndex,
-                            onClick = { viewModel.selectSection(section) },
-                        ) {
-                            Text(
-                                text = stringResource(section.labelRes).uppercase(),
-                                style = MaterialTheme.typography.labelLarge,
-                                fontFamily = GoogleSansRounded,
-                                fontWeight = if (selectedIndex == index) FontWeight.Bold else FontWeight.Medium,
-                            )
+                if (!isCompactNavigation) {
+                    PrimaryScrollableTabRow(
+                        selectedTabIndex = selectedIndex.coerceAtLeast(0),
+                        containerColor = Color.Transparent,
+                        edgePadding = 12.dp,
+                        indicator = {},
+                        divider = {},
+                    ) {
+                        sections.forEachIndexed { index, section ->
+                            TabAnimation(
+                                index = index,
+                                title = section.name,
+                                selectedIndex = if (selectedIndex < 0) -1 else selectedIndex,
+                                onClick = { viewModel.selectSection(section) },
+                            ) {
+                                Text(
+                                    text = stringResource(section.labelRes).uppercase(),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontFamily = GoogleSansRounded,
+                                    fontWeight = if (selectedIndex == index) FontWeight.Bold else FontWeight.Medium,
+                                )
+                            }
                         }
                     }
+                } else {
+                    CompactLibraryPagerIndicator(
+                        currentIndex = selectedIndex.coerceAtLeast(0),
+                        pageCount = sections.size,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 10.dp),
+                    )
                 }
             }
         },
@@ -547,6 +578,18 @@ fun SoundCloudScreen(
             }
         }
     }
+
+    if (showSectionSwitcherSheet) {
+        SoundCloudSectionSwitcherSheet(
+            sections = sections,
+            currentIndex = selectedIndex.coerceAtLeast(0),
+            onSectionSelected = { index ->
+                sections.getOrNull(index)?.let(viewModel::selectSection)
+                showSectionSwitcherSheet = false
+            },
+            onDismiss = { showSectionSwitcherSheet = false },
+        )
+    }
 }
 
 @Composable
@@ -663,6 +706,129 @@ private fun SoundCloudFeedHome(
         }
     }
 }
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SoundCloudSectionSwitcherSheet(
+    sections: List<SoundCloudSection>,
+    currentIndex: Int,
+    onSectionSelected: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.soundcloud_tabs_sheet_title),
+                style = MaterialTheme.typography.headlineSmall,
+                fontFamily = GoogleSansRounded,
+            )
+            Text(
+                text = stringResource(R.string.soundcloud_tabs_sheet_subtitle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 150.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 24.dp, top = 8.dp),
+            ) {
+                itemsIndexed(
+                    items = sections,
+                    key = { index, section -> "${section.name}-$index" },
+                ) { index, section ->
+                    SoundCloudSectionGridItem(
+                        section = section,
+                        isSelected = index == currentIndex,
+                        onClick = { onSectionSelected(index) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoundCloudSectionGridItem(
+    section: SoundCloudSection,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(20.dp)
+    val containerColor =
+        if (isSelected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceContainerHigh
+    val iconContainer =
+        if (isSelected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.secondaryContainer
+    val textColor =
+        if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+        else MaterialTheme.colorScheme.onSurface
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .clickable(onClick = onClick),
+        shape = shape,
+        color = containerColor,
+        tonalElevation = if (isSelected) 6.dp else 2.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 14.dp, horizontal = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(iconContainer.copy(alpha = 0.92f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = section.iconRes),
+                    contentDescription = stringResource(section.labelRes),
+                    tint = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    },
+                )
+            }
+            Text(
+                text = stringResource(section.labelRes),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = textColor,
+            )
+        }
+    }
+}
+
+private val SoundCloudSection.iconRes: Int
+    get() = when (this) {
+        SoundCloudSection.FEED -> R.drawable.rounded_home_24
+        SoundCloudSection.DISCOVER -> R.drawable.rounded_instant_mix_24
+        SoundCloudSection.SEARCH -> R.drawable.rounded_search_24
+        SoundCloudSection.LIKES -> R.drawable.rounded_favorite_24
+        SoundCloudSection.TRACKS -> R.drawable.rounded_music_note_24
+        SoundCloudSection.PLAYLISTS -> R.drawable.rounded_playlist_play_24
+        SoundCloudSection.DOWNLOADS -> R.drawable.rounded_drive_export_24
+    }
 
 private val SoundCloudSection.labelRes: Int
     get() = when (this) {
