@@ -5,6 +5,8 @@
 
 package com.theveloper.pixelplay.presentation.screens
 
+import android.content.Intent
+
 import androidx.activity.compose.BackHandler
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
 import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
@@ -65,6 +67,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -674,6 +677,7 @@ fun SoundCloudScreen(
                                 onPlay = { onHitPlay(hit, uiState.results) },
                                 onDownload = { viewModel.download(hit) },
                                 onToggleLike = { viewModel.toggleLike(hit) },
+                                onShare = { shareSoundCloudLink(context, hit) },
                             )
                         }
                     }
@@ -732,6 +736,7 @@ fun SoundCloudScreen(
                                 onPlay = { onHitPlay(hit, uiState.results) },
                                 onDownload = { viewModel.download(hit) },
                                 onToggleLike = { viewModel.toggleLike(hit) },
+                                onShare = { shareSoundCloudLink(context, hit) },
                             )
                         }
                     }
@@ -882,6 +887,7 @@ private fun SoundCloudFeedHome(
     onToggleLike: (SoundCloudSearchHit) -> Unit,
     onLoadMore: () -> Unit,
 ) {
+    val context = LocalContext.current
     var selectedShelfId by remember(shelves.map { it.id }) {
         mutableStateOf(shelves.firstOrNull()?.id.orEmpty())
     }
@@ -960,6 +966,7 @@ private fun SoundCloudFeedHome(
                                             onPlay = { onPlay(hit, shelf.items) },
                                             onDownload = { onDownload(hit) },
                                             onToggleLike = { onToggleLike(hit) },
+                                            onShare = { shareSoundCloudLink(context, hit) },
                                         )
                                     }
                                 }
@@ -984,6 +991,7 @@ private fun SoundCloudFeedHome(
                                 onPlay = { onPlay(hit, shelf.items) },
                                 onDownload = { onDownload(hit) },
                                 onToggleLike = { onToggleLike(hit) },
+                                onShare = { shareSoundCloudLink(context, hit) },
                             )
                         }
                     }
@@ -1246,6 +1254,7 @@ private fun SoundCloudResultTile(
     onPlay: () -> Unit,
     onDownload: () -> Unit,
     onToggleLike: () -> Unit,
+    onShare: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1294,7 +1303,25 @@ private fun SoundCloudResultTile(
                             .align(Alignment.Center),
                     )
                 }
-            } else if (hit.kind == SoundCloudSearchHit.Kind.TRACK) {
+            } else {
+                IconButton(
+                    onClick = onShare,
+                    enabled = enabled && hit.url.isNotBlank(),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Share,
+                        contentDescription = stringResource(R.string.soundcloud_share_link),
+                    )
+                }
+            }
+            if (!isResolving && hit.kind == SoundCloudSearchHit.Kind.TRACK) {
                 IconButton(
                     onClick = onToggleLike,
                     enabled = enabled && !isLiking,
@@ -1364,6 +1391,7 @@ private fun SoundCloudResultRow(
     onPlay: () -> Unit,
     onDownload: () -> Unit,
     onToggleLike: () -> Unit,
+    onShare: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -1449,6 +1477,14 @@ private fun SoundCloudResultRow(
                 }
             }
 
+            if (!isResolving && hit.url.isNotBlank()) {
+                IconButton(onClick = onShare, enabled = enabled) {
+                    Icon(
+                        imageVector = Icons.Rounded.Share,
+                        contentDescription = stringResource(R.string.soundcloud_share_link),
+                    )
+                }
+            }
             if (hit.kind == SoundCloudSearchHit.Kind.TRACK && !isResolving) {
                 IconButton(onClick = onToggleLike, enabled = enabled && !isLiking) {
                     if (isLiking) {
@@ -1485,6 +1521,20 @@ private fun SoundCloudResultRow(
             }
         }
     }
+}
+
+
+private fun shareSoundCloudLink(context: android.content.Context, hit: SoundCloudSearchHit) {
+    val url = hit.url.trim()
+    if (url.isBlank()) return
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, hit.title)
+        putExtra(Intent.EXTRA_TEXT, url)
+    }
+    context.startActivity(
+        Intent.createChooser(send, context.getString(R.string.soundcloud_share_link)),
+    )
 }
 
 private fun formatDuration(seconds: Long): String {

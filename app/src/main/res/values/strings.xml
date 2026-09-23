@@ -37,6 +37,7 @@
     <string name="soundcloud_download">Download</string>
     <string name="soundcloud_like">Like track</string>
     <string name="soundcloud_unlike">Unlike track</string>
+    <string name="soundcloud_share_link">Share link</string>
     <string name="soundcloud_shuffle">Shuffle</string>
     <string name="soundcloud_cd_shuffle">Shuffle play current list</string>
     <string name="soundcloud_view_tiles">Tiles</string>
