@@ -724,11 +724,12 @@ class SoundCloudViewModel @Inject constructor(
             client.loadUserLikes(_uiState.value.username, limit)
         }
         if (client.hasSession) {
+            val likedUrls = hits
+                .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
+                .map { it.url }
+            client.rememberLikes(likedUrls)
             _uiState.update { state ->
-                state.copy(
-                    likedTrackUrls = state.likedTrackUrls +
-                        hits.filter { it.kind == SoundCloudSearchHit.Kind.TRACK }.map { it.url },
-                )
+                state.copy(likedTrackUrls = state.likedTrackUrls + likedUrls)
             }
         }
         hits

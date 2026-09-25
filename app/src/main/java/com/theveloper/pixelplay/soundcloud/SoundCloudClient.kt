@@ -21,6 +21,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * SoundCloud access via NewPipe Extractor (web api-v2).
@@ -36,6 +40,9 @@ class SoundCloudClient @Inject constructor(
     private val downloader = SoundCloudDownloader()
     private val runtimeClientId = AtomicReference<String?>(null)
     private val resolveCache = ConcurrentHashMap<String, CachedResolve>()
+    private val permalinkBySongId = ConcurrentHashMap<String, String>()
+    private val _likedPermalinks = MutableStateFlow<Set<String>>(emptySet())
+    val likedPermalinks: StateFlow<Set<String>> = _likedPermalinks.asStateFlow()
 
     private data class CachedResolve(
         val track: SoundCloudResolvedTrack,
@@ -90,8 +97,19 @@ class SoundCloudClient @Inject constructor(
     fun loadMyPlaylists(limit: Int = 40): List<SoundCloudSearchHit> = sessionApi.loadMyPlaylists(limit)
 
     @Throws(Exception::class)
-    fun setTrackLiked(trackUrl: String, liked: Boolean) =
-        sessionApi.setTrackLiked(trackUrl, liked)
+    fun setTrackLiked(trackUrl: String, liked: Boolean) {
+        val url = trackUrl.trim()
+        sessionApi.setTrackLiked(url, liked)
+        _likedPermalinks.update { current -> if (liked) current + url else current - url }
+    }
+
+    fun rememberLikes(urls: Collection<String>) {
+        val clean = urls.map { it.trim() }.filter { it.isNotEmpty() }
+        if (clean.isEmpty()) return
+        _likedPermalinks.update { it + clean }
+    }
+
+    fun permalinkForSong(songId: String): String? = permalinkBySongId[songId]
 
     @Throws(Exception::class)
     fun loadDiscover(limit: Int = 30): List<SoundCloudSearchHit> {
@@ -267,6 +285,8 @@ class SoundCloudClient @Inject constructor(
     fun toSong(track: SoundCloudResolvedTrack, permalinkUrl: String = track.url): Song {
         // Prefer the list permalink so UI can match the now-playing row without resolving again.
         val id = songIdForUrl(permalinkUrl.ifBlank { track.url })
+        val permalink = permalinkUrl.ifBlank { track.url }.trim()
+        if (permalink.isNotEmpty()) permalinkBySongId[id] = permalink
         return Song(
             id = id,
             title = track.title,

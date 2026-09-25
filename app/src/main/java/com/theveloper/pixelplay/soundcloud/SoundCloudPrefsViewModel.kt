@@ -79,4 +79,22 @@ class SoundCloudPrefsViewModel @Inject constructor(
             sessionApi.updateSession(null, null, clientId.value)
         }
     }
+
+    val likedPermalinks: StateFlow<Set<String>> = client.likedPermalinks
+
+    fun permalinkFor(songId: String): String? = client.permalinkForSong(songId)
+
+    /**
+     * Returns an error message when the like could not be saved.
+     */
+    suspend fun toggleSoundCloudLike(songId: String): String? = withContext(Dispatchers.IO) {
+        val url = client.permalinkForSong(songId)
+            ?: return@withContext "This SoundCloud track can't be liked from here"
+        if (!client.hasSession) return@withContext "Sign in to SoundCloud to like tracks"
+        val shouldLike = url !in client.likedPermalinks.value
+        runCatching { client.setTrackLiked(url, shouldLike) }
+            .exceptionOrNull()
+            ?.message
+            ?.ifBlank { "Couldn't update the SoundCloud like" }
+    }
 }
