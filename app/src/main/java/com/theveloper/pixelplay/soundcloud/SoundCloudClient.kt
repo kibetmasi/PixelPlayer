@@ -305,7 +305,7 @@ class SoundCloudClient @Inject constructor(
         ensureClientIdReady()
         val user = username.trim().removePrefix("@").removePrefix("https://soundcloud.com/")
             .substringBefore('/')
-        require(user.isNotEmpty()) { "Set your SoundCloud username in Settings → Experimental" }
+        require(user.isNotEmpty()) { "Set your SoundCloud username in SoundCloud settings" }
 
         val url = "https://soundcloud.com/$user" + when (tab) {
             ChannelTabs.LIKES -> "/likes"
@@ -335,7 +335,7 @@ class SoundCloudClient @Inject constructor(
             SoundcloudParsingHelper.clientId()
         } catch (t: Throwable) {
             throw IllegalStateException(
-                "Couldn't auto-fetch SoundCloud client_id. Paste one in Settings → Experimental. (${t.message})",
+                "Couldn't auto-fetch SoundCloud client_id. Paste one in SoundCloud settings. (${t.message})",
                 t,
             )
         }
@@ -424,7 +424,7 @@ class SoundCloudClient @Inject constructor(
                 msg.contains("rate limited", ignoreCase = true) ->
                 "$prefix: SoundCloud rate-limited you. Wait a bit and try again."
             msg.contains("client", ignoreCase = true) ->
-                "$prefix: client_id missing/expired. Open Settings → Experimental and save a fresh client_id (or retry)."
+                "$prefix: client_id missing/expired. Open SoundCloud settings and save a fresh client_id (or retry)."
             else -> "$prefix. $msg"
         }
         return IllegalStateException(friendly, t)

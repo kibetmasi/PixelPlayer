@@ -374,7 +374,7 @@ fun SoundCloudScreen(
                     actions = {
                         FilledIconButton(
                             modifier = Modifier.padding(end = 14.dp),
-                            onClick = { navController.navigateSafely(Screen.Experimental.route) },
+                            onClick = { navController.navigateSafely(Screen.SoundCloudSettings.route) },
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,

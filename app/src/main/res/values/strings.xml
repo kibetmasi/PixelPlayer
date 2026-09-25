@@ -48,6 +48,10 @@
     <string name="soundcloud_cd_view_tiles">Tile view</string>
     <string name="soundcloud_cd_view_list">List view</string>
     <string name="soundcloud_section">SoundCloud</string>
+    <string name="soundcloud_settings_title">SoundCloud</string>
+    <string name="soundcloud_provider_subtitle_signed_in">Signed in</string>
+    <string name="soundcloud_provider_subtitle_ready">client_id saved</string>
+    <string name="soundcloud_provider_subtitle_setup">Set client_id and sign in</string>
     <string name="soundcloud_profile_line">Profile: @%1$s</string>
     <string name="soundcloud_playlist_browsing">Playlist: %1$s</string>
     <string name="soundcloud_playlist_count">%1$d tracks</string>
@@ -85,6 +89,13 @@
     <string name="playstore_dialog_app_name">PixelPlayer</string>
     <string name="playstore_dialog_release_announcement">Release announcement</string>
     <string name="playstore_dialog_coming_soon">Coming soon</string>
+    <string name="update_dialog_title">A new version is available</string>
+    <string name="update_dialog_body">PixelPlayer %1$s is ready to install. Open the latest release and download the APK for your phone.</string>
+    <string name="update_dialog_action">Download</string>
+    <string name="update_dialog_downloading">Downloading…</string>
+    <string name="update_dialog_install_permission">Allow PixelPlayer to install updates, then tap Download again.</string>
+    <string name="update_dialog_failed">Couldn\'t download the update. Check your connection and try again.</string>
+    <string name="update_dialog_later">Later</string>
 
     <!-- Brick breaker -->
     <string name="easter_egg_thank_you">Thank you for using PixelPlayer!</string>

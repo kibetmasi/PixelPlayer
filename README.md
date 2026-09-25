@@ -45,9 +45,8 @@ SoundCloud in PixelPlayer needs a **web `client_id`** (from SoundCloud’s websi
 
 ### 1. Open SoundCloud settings in the app
 
-1. Go to the **SoundCloud** tab.
-2. Tap the **gear** (top right) → opens **Experimental**.
-3. You’ll see fields for **client_id**, optional username, and **Sign in**.
+1. On **Home**, tap the **cloud** icon and choose **SoundCloud**. The gear on the **SoundCloud** tab opens the same page.
+2. You’ll see fields for **client_id**, optional username, and **Sign in**. The SoundCloud tab itself stays in the bottom bar.
 
 ### 2. Get a `client_id` from your browser
 
@@ -71,7 +70,7 @@ Do this on a computer (Chrome / Edge / Firefox):
 
 ### 3. Paste it into PixelPlayer
 
-1. Back in **Experimental**, paste the value into **Web client_id**.
+1. Back in **SoundCloud settings**, paste the value into **Web client_id**.
 2. Tap **Save SoundCloud settings**.
 3. (Recommended) Tap **Sign in to SoundCloud**, log in in the browser window, then confirm you’re signed in.
 4. Return to the SoundCloud tab — Feed / Likes / playlists should load after a moment.

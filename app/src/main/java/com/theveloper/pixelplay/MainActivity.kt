@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Build
+import java.io.File
 import android.graphics.RenderEffect as AndroidRenderEffect
 import android.graphics.Shader as AndroidShader
 import androidx.compose.ui.graphics.asComposeRenderEffect
@@ -92,6 +93,7 @@ import com.theveloper.pixelplay.presentation.viewmodel.PlayerSheetState
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
+import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.media3.common.util.UnstableApi
@@ -105,6 +107,7 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.theveloper.pixelplay.data.github.GitHubAnnouncementPropertiesService
+import com.theveloper.pixelplay.data.github.GitHubReleaseUpdateService
 import com.theveloper.pixelplay.data.github.PlayStoreAnnouncementRemoteConfig
 import com.theveloper.pixelplay.data.preferences.AppThemeMode
 import com.theveloper.pixelplay.data.preferences.NavBarStyle
@@ -143,6 +146,7 @@ import com.theveloper.pixelplay.utils.LogUtils
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import kotlin.math.roundToInt
@@ -478,6 +482,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openReleasePage(url: String) {
+        if (!GitHubReleaseUpdateService.isAllowedReleasePage(url)) {
+            LogUtils.w(this, "Refusing to open release URL: $url")
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+        } catch (_: ActivityNotFoundException) {
+            LogUtils.w(this, "No activity available to open URL: $url")
+        }
+    }
+
+    private fun installDownloadedApk(file: File) {
+        val uri = FileProvider.getUriForFile(this, "$packageName.provider", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            LogUtils.w(this, "No activity available to install update")
+        }
+    }
+
+    private fun rememberDismissedUpdate(version: String) {
+        getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE)
+            .edit()
+            .putString(UPDATE_DISMISSED_VERSION, version)
+            .apply()
+    }
+
     private fun PlayStoreAnnouncementRemoteConfig.toUiModel(context: Context): PlayStoreAnnouncementUiModel {
         val fallback = PlayStoreAnnouncementDefaults.localizedTemplate(context)
         return fallback.copy(
@@ -637,6 +674,7 @@ class MainActivity : ComponentActivity() {
                 Screen.Stats.route,
                 Screen.EditTransition.route,
                 Screen.Experimental.route,
+                Screen.SoundCloudSettings.route,
                 Screen.ArtistSettings.route,
                 Screen.Equalizer.route,
                 Screen.SettingsCategory.route,
@@ -743,11 +781,19 @@ class MainActivity : ComponentActivity() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val announcementService = remember { GitHubAnnouncementPropertiesService() }
+        val releaseUpdateService = remember { GitHubReleaseUpdateService() }
         val context = LocalContext.current
         var playStoreAnnouncement by remember {
             mutableStateOf(PlayStoreAnnouncementDefaults.localizedTemplate(context))
         }
         var showPlayStoreAnnouncement by remember { mutableStateOf(false) }
+        var pendingUpdateVersion by remember { mutableStateOf<String?>(null) }
+        var updateAnnouncement by remember {
+            mutableStateOf(PlayStoreAnnouncementDefaults.localizedTemplate(context))
+        }
+        var showUpdateAnnouncement by remember { mutableStateOf(false) }
+        var updateDownloadBusy by remember { mutableStateOf(false) }
+        var updateDownloadJob by remember { mutableStateOf<Job?>(null) }
 
         LaunchedEffect(Unit) {
             if (PlayStoreAnnouncementDefaults.LOCAL_PREVIEW_ENABLED) {
@@ -766,6 +812,35 @@ class MainActivity : ComponentActivity() {
                     LogUtils.w(
                         this@MainActivity,
                         "Remote announcement unavailable. Keeping popup disabled. ${throwable.message ?: ""}",
+                    )
+                }
+        }
+
+        LaunchedEffect(Unit) {
+            val installed = BuildConfig.VERSION_NAME.trim().removePrefix("v")
+            if (installed.isEmpty() || installed == "1.0.0") return@LaunchedEffect
+            releaseUpdateService.fetchLatestRelease()
+                .onSuccess { latest ->
+                    if (latest.version == installed) return@onSuccess
+                    val dismissed = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE)
+                        .getString(UPDATE_DISMISSED_VERSION, null)
+                    if (dismissed == latest.version) return@onSuccess
+                    pendingUpdateVersion = latest.version
+                    updateAnnouncement = PlayStoreAnnouncementUiModel(
+                        enabled = true,
+                        title = getString(R.string.update_dialog_title),
+                        body = getString(R.string.update_dialog_body, latest.version),
+                        playStoreUrl = latest.apkUrl.ifBlank { latest.pageUrl },
+                        primaryActionLabel = getString(R.string.update_dialog_action),
+                        dismissActionLabel = getString(R.string.update_dialog_later),
+                        linkPendingMessage = "",
+                    )
+                    showUpdateAnnouncement = true
+                }
+                .onFailure { throwable ->
+                    LogUtils.w(
+                        this@MainActivity,
+                        "Release check unavailable. ${throwable.message ?: ""}",
                     )
                 }
         }
@@ -1060,6 +1135,53 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
+                        if (showUpdateAnnouncement) {
+                            PlayStoreAnnouncementDialog(
+                                announcement = updateAnnouncement,
+                                primaryBusy = updateDownloadBusy,
+                                onDismiss = {
+                                    updateDownloadJob?.cancel()
+                                    updateDownloadBusy = false
+                                    pendingUpdateVersion?.let(::rememberDismissedUpdate)
+                                    showUpdateAnnouncement = false
+                                },
+                                onOpenPlayStore = { url ->
+                                    if (GitHubReleaseUpdateService.isAllowedApkDownload(url)) {
+                                        if (!packageManager.canRequestPackageInstalls()) {
+                                            updateAnnouncement = updateAnnouncement.copy(
+                                                body = getString(R.string.update_dialog_install_permission),
+                                            )
+                                            startActivity(
+                                                Intent(
+                                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                                    "package:$packageName".toUri(),
+                                                ),
+                                            )
+                                            return@PlayStoreAnnouncementDialog
+                                        }
+                                        if (updateDownloadBusy) return@PlayStoreAnnouncementDialog
+                                        updateDownloadBusy = true
+                                        updateDownloadJob = scope.launch {
+                                            val file = File(cacheDir, "updates/PixelPlayer-update.apk")
+                                            releaseUpdateService.downloadApk(url, file)
+                                                .onSuccess { apk ->
+                                                    updateDownloadBusy = false
+                                                    showUpdateAnnouncement = false
+                                                    installDownloadedApk(apk)
+                                                }
+                                                .onFailure {
+                                                    updateDownloadBusy = false
+                                                    updateAnnouncement = updateAnnouncement.copy(
+                                                        body = getString(R.string.update_dialog_failed),
+                                                    )
+                                                }
+                                        }
+                                    } else {
+                                        openReleasePage(url)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -1210,6 +1332,11 @@ private class NavBarShapeCache {
             )
         }
         return cached
+    }
+
+    private companion object {
+        const val UPDATE_PREFS = "pixelplay_updates"
+        const val UPDATE_DISMISSED_VERSION = "dismissed_release_version"
     }
 }
 

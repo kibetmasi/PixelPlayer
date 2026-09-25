@@ -41,6 +41,7 @@ import com.theveloper.pixelplay.presentation.screens.DailyMixScreen
 import com.theveloper.pixelplay.presentation.screens.EditTransitionScreen
 import com.theveloper.pixelplay.presentation.screens.EasterEggScreen
 import com.theveloper.pixelplay.presentation.screens.ExperimentalSettingsScreen
+import com.theveloper.pixelplay.presentation.screens.SoundCloudSettingsScreen
 import com.theveloper.pixelplay.presentation.screens.GenreDetailScreen
 import com.theveloper.pixelplay.presentation.screens.HomeScreen
 import com.theveloper.pixelplay.presentation.screens.LibraryScreen
@@ -302,6 +303,13 @@ fun AppNavigation(
                         playerViewModel = playerViewModel,
                         onBackClick = { navController.popBackStack() }
                     )
+                }
+            }
+            composable(
+                Screen.SoundCloudSettings.route,
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel, animatedVisibilityScope = this) {
+                    SoundCloudSettingsScreen(navController = navController)
                 }
             }
             composable(
