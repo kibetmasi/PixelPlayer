@@ -1268,7 +1268,10 @@ class MainActivity : ComponentActivity() {
         super.onResume()
     }
 
-
+    private companion object {
+        const val UPDATE_PREFS = "pixelplay_updates"
+        const val UPDATE_DISMISSED_VERSION = "dismissed_release_version"
+    }
 }
 
 /**
@@ -1332,11 +1335,6 @@ private class NavBarShapeCache {
             )
         }
         return cached
-    }
-
-    private companion object {
-        const val UPDATE_PREFS = "pixelplay_updates"
-        const val UPDATE_DISMISSED_VERSION = "dismissed_release_version"
     }
 }
 
