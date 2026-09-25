@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
+import android.widget.Toast
 import java.io.File
 import android.graphics.RenderEffect as AndroidRenderEffect
 import android.graphics.Shader as AndroidShader
@@ -66,10 +68,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -117,7 +123,7 @@ import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.data.service.MusicService
 import com.theveloper.pixelplay.data.worker.SyncManager
 import com.theveloper.pixelplay.data.worker.SyncProgress
-import com.theveloper.pixelplay.presentation.components.AllFilesAccessDialog
+import com.theveloper.pixelplay.presentation.components.LocalRequestAppUpdateCheck
 import com.theveloper.pixelplay.presentation.components.AppSidebarDrawer
 import com.theveloper.pixelplay.presentation.components.CrashReportDialog
 import com.theveloper.pixelplay.presentation.components.DismissUndoBar
@@ -146,6 +152,7 @@ import com.theveloper.pixelplay.utils.LogUtils
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -816,15 +823,36 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
-        LaunchedEffect(Unit) {
+        var lastUpdateCheckElapsed by remember { mutableLongStateOf(0L) }
+        val lifecycleOwner = LocalLifecycleOwner.current
+
+        suspend fun refreshAvailableUpdate(force: Boolean = false) {
             val installed = BuildConfig.VERSION_NAME.trim().removePrefix("v")
-            if (installed.isEmpty() || installed == "1.0.0") return@LaunchedEffect
+            if (!force && (installed.isEmpty() || installed == "1.0.0")) return
+            if (showUpdateAnnouncement || updateDownloadBusy) return
+            val now = SystemClock.elapsedRealtime()
+            if (!force &&
+                lastUpdateCheckElapsed != 0L &&
+                now - lastUpdateCheckElapsed < UPDATE_CHECK_INTERVAL_MS
+            ) {
+                return
+            }
             releaseUpdateService.fetchLatestRelease()
                 .onSuccess { latest ->
-                    if (latest.version == installed) return@onSuccess
+                    lastUpdateCheckElapsed = SystemClock.elapsedRealtime()
+                    if (latest.version == installed) {
+                        if (force) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                getString(R.string.changelog_up_to_date),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                        return@onSuccess
+                    }
                     val dismissed = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE)
                         .getString(UPDATE_DISMISSED_VERSION, null)
-                    if (dismissed == latest.version) return@onSuccess
+                    if (!force && dismissed == latest.version) return@onSuccess
                     pendingUpdateVersion = latest.version
                     updateAnnouncement = PlayStoreAnnouncementUiModel(
                         enabled = true,
@@ -843,6 +871,15 @@ class MainActivity : ComponentActivity() {
                         "Release check unavailable. ${throwable.message ?: ""}",
                     )
                 }
+        }
+
+        LaunchedEffect(lifecycleOwner) {
+            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (isActive) {
+                    refreshAvailableUpdate()
+                    delay(UPDATE_CHECK_INTERVAL_MS)
+                }
+            }
         }
 
         LaunchedEffect(userPreferencesRepository) {
@@ -1041,6 +1078,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                         ) {
+                            CompositionLocalProvider(
+                                LocalRequestAppUpdateCheck provides {
+                                    scope.launch { refreshAvailableUpdate(force = true) }
+                                },
+                            ) {
                             AppNavigation(
                                 playerViewModel = playerViewModel,
                                 navController = navController,
@@ -1049,6 +1091,7 @@ class MainActivity : ComponentActivity() {
                                 onSearchBarActiveChange = { isSearchBarActive = it },
                                 onOpenSidebar = { scope.launch { drawerState.open() } }
                             )
+                            }
                         }
 
                         val isExpandedOrExpanding by remember {
@@ -1271,6 +1314,7 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val UPDATE_PREFS = "pixelplay_updates"
         const val UPDATE_DISMISSED_VERSION = "dismissed_release_version"
+        const val UPDATE_CHECK_INTERVAL_MS = 48L * 24 * 60 * 60 * 1000
     }
 }
 

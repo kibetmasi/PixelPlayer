@@ -538,7 +538,7 @@ fun HomeScreen(
             onDismissRequest = { showChangelogBottomSheet = false },
             sheetState = sheetState
         ) {
-            ChangelogBottomSheet()
+            ChangelogBottomSheet(onDismiss = { showChangelogBottomSheet = false })
         }
     }
     if (showBetaInfoBottomSheet) {
