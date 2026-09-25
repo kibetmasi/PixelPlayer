@@ -27,6 +27,9 @@
     <string name="soundcloud_username_hint">public profile handle (no @)</string>
     <string name="soundcloud_settings_help">Sign in with your SoundCloud account for personalized feed and likes. client_id is still required for streaming. Optional public username is a fallback when signed out.</string>
     <string name="soundcloud_save_settings">Save SoundCloud settings</string>
+    <string name="soundcloud_include_downloads_in_library">Add downloads to library</string>
+    <string name="soundcloud_include_downloads_in_library_subtitle">On: downloaded songs show in your library and on the Downloads tab. Off: they stay only on the SoundCloud Downloads tab.</string>
+    <string name="soundcloud_unavailable">Unavailable</string>
     <string name="soundcloud_sign_in">Sign in to SoundCloud</string>
     <string name="soundcloud_sign_out">Sign out</string>
     <string name="soundcloud_sign_in_done">I\'m signed in</string>

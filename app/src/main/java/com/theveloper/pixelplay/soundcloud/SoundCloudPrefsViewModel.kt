@@ -17,6 +17,7 @@ class SoundCloudPrefsViewModel @Inject constructor(
     private val settings: SoundCloudSettings,
     private val sessionApi: SoundCloudSessionApi,
     private val client: SoundCloudClient,
+    private val libraryGate: SoundCloudLibraryGate,
 ) : ViewModel() {
     val clientId: StateFlow<String> = settings.clientId.stateIn(
         viewModelScope,
@@ -32,6 +33,11 @@ class SoundCloudPrefsViewModel @Inject constructor(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
         SoundCloudSession(),
+    )
+    val includeDownloadsInLibrary: StateFlow<Boolean> = settings.includeDownloadsInLibrary.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        true,
     )
 
     fun saveClientId(value: String) {
@@ -56,6 +62,13 @@ class SoundCloudPrefsViewModel @Inject constructor(
                 displayName = profile?.first.orEmpty(),
                 permalink = profile?.second.orEmpty(),
             )
+        }
+    }
+
+    fun setIncludeDownloadsInLibrary(include: Boolean) {
+        viewModelScope.launch {
+            settings.setIncludeDownloadsInLibrary(include)
+            runCatching { libraryGate.apply(include) }
         }
     }
 

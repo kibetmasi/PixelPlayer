@@ -102,6 +102,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -249,14 +250,14 @@ fun SoundCloudScreen(
                 scope.launch {
                     try {
                         // Resolve only the tapped track — don't wait on the whole list.
-                        val startSong = viewModel.resolveStartForPlayback(hit)
+                        val (startSong, startHit) = viewModel.resolvePlayableStart(hit, queueHits)
                         playerViewModel.playSongs(
                             songsToPlay = listOf(startSong),
                             startSong = startSong,
                             queueName = "SoundCloud",
                         )
                         viewModel.setIdle()
-                        viewModel.prefetchQueueAfter(hit, queueHits) { song ->
+                        viewModel.prefetchQueueAfter(startHit, queueHits) { song ->
                             playerViewModel.addSongToQueue(song)
                         }
                     } catch (t: Throwable) {
@@ -674,6 +675,7 @@ fun SoundCloudScreen(
                             isWideScreen = isWideScreen,
                             likedTrackUrls = uiState.likedTrackUrls,
                             likingUrl = uiState.likingUrl,
+                            unplayableUrls = uiState.unplayableUrls,
                             currentSong = currentSong,
                             isPlaying = isPlaying,
                             onPlay = onHitPlay,
@@ -971,6 +973,7 @@ private fun SoundCloudResultsGrid(
                     isResolving = uiState.resolvingKey == hit.url,
                     isLiked = hit.url in uiState.likedTrackUrls,
                     isLiking = uiState.likingUrl == hit.url,
+                    unavailable = hit.kind == SoundCloudSearchHit.Kind.TRACK && hit.url in uiState.unplayableUrls,
                     isCurrent = isCurrent,
                     isPlaying = isCurrent && isPlaying,
                     onPlay = { onHitPlay(hit, uiState.results) },
@@ -1049,6 +1052,7 @@ private fun SoundCloudResultsList(
                     isResolving = uiState.resolvingKey == hit.url,
                     isLiked = hit.url in uiState.likedTrackUrls,
                     isLiking = uiState.likingUrl == hit.url,
+                    unavailable = hit.kind == SoundCloudSearchHit.Kind.TRACK && hit.url in uiState.unplayableUrls,
                     isCurrent = isCurrent,
                     isPlaying = isCurrent && isPlaying,
                     onPlay = { onHitPlay(hit, uiState.results) },
@@ -1071,6 +1075,7 @@ private fun SoundCloudFeedHome(
     isWideScreen: Boolean,
     likedTrackUrls: Set<String>,
     likingUrl: String?,
+    unplayableUrls: Set<String>,
     currentSong: Song?,
     isPlaying: Boolean,
     onPlay: (SoundCloudSearchHit, List<SoundCloudSearchHit>) -> Unit,
@@ -1107,6 +1112,7 @@ private fun SoundCloudFeedHome(
                     resolvingKey = resolvingKey,
                     likedTrackUrls = likedTrackUrls,
                     likingUrl = likingUrl,
+                    unplayableUrls = unplayableUrls,
                     currentSong = currentSong,
                     isPlaying = isPlaying,
                     showTitle = true,
@@ -1192,6 +1198,7 @@ private fun SoundCloudFeedHome(
                         resolvingKey = resolvingKey,
                         likedTrackUrls = likedTrackUrls,
                         likingUrl = likingUrl,
+                        unplayableUrls = unplayableUrls,
                         currentSong = currentSong,
                         isPlaying = isPlaying,
                         showTitle = false,
@@ -1214,6 +1221,7 @@ private fun SoundCloudFeedShelfBody(
     resolvingKey: String?,
     likedTrackUrls: Set<String>,
     likingUrl: String?,
+    unplayableUrls: Set<String>,
     currentSong: Song?,
     isPlaying: Boolean,
     showTitle: Boolean,
@@ -1251,6 +1259,8 @@ private fun SoundCloudFeedShelfBody(
                                     isResolving = resolvingKey == hit.url,
                                     isLiked = hit.url in likedTrackUrls,
                                     isLiking = likingUrl == hit.url,
+                                    unavailable = hit.kind == SoundCloudSearchHit.Kind.TRACK &&
+                                        hit.url in unplayableUrls,
                                     isCurrent = isCurrent,
                                     isPlaying = isCurrent && isPlaying,
                                     onPlay = { onPlay(hit, shelf.items) },
@@ -1280,6 +1290,8 @@ private fun SoundCloudFeedShelfBody(
                         isResolving = resolvingKey == hit.url,
                         isLiked = hit.url in likedTrackUrls,
                         isLiking = likingUrl == hit.url,
+                        unavailable = hit.kind == SoundCloudSearchHit.Kind.TRACK &&
+                            hit.url in unplayableUrls,
                         isCurrent = isCurrent,
                         isPlaying = isCurrent && isPlaying,
                         onPlay = { onPlay(hit, shelf.items) },
@@ -1545,6 +1557,7 @@ private fun SoundCloudResultTile(
     isResolving: Boolean = false,
     isLiked: Boolean = false,
     isLiking: Boolean = false,
+    unavailable: Boolean = false,
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
     onPlay: () -> Unit,
@@ -1555,7 +1568,8 @@ private fun SoundCloudResultTile(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled && !isResolving, onClick = onPlay),
+            .alpha(if (unavailable) 0.38f else 1f)
+            .clickable(enabled = enabled && !isResolving && !unavailable, onClick = onPlay),
     ) {
         Box(
             modifier = Modifier
@@ -1636,7 +1650,7 @@ private fun SoundCloudResultTile(
                     )
                 }
             }
-            if (!isResolving && hit.kind == SoundCloudSearchHit.Kind.TRACK) {
+            if (!isResolving && hit.kind == SoundCloudSearchHit.Kind.TRACK && !unavailable) {
                 IconButton(
                     onClick = onToggleLike,
                     enabled = enabled && !isLiking,
@@ -1663,7 +1677,7 @@ private fun SoundCloudResultTile(
                 }
                 IconButton(
                     onClick = onDownload,
-                    enabled = enabled,
+                    enabled = enabled && !unavailable,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(2.dp)
@@ -1692,7 +1706,7 @@ private fun SoundCloudResultTile(
             color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            text = hit.artist,
+            text = if (unavailable) stringResource(R.string.soundcloud_unavailable) else hit.artist,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -1708,6 +1722,7 @@ private fun SoundCloudResultRow(
     isResolving: Boolean = false,
     isLiked: Boolean = false,
     isLiking: Boolean = false,
+    unavailable: Boolean = false,
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
     onPlay: () -> Unit,
@@ -1721,8 +1736,9 @@ private fun SoundCloudResultRow(
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(if (unavailable) 0.38f else 1f)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled && !isResolving, onClick = onPlay),
+            .clickable(enabled = enabled && !isResolving && !unavailable, onClick = onPlay),
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -1781,12 +1797,13 @@ private fun SoundCloudResultRow(
                     color = if (isCurrent) colors.primary else colors.onSurface,
                 )
                 Text(
-                    text = hit.artist,
+                    text = if (unavailable) stringResource(R.string.soundcloud_unavailable) else hit.artist,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
                 val meta = when {
+                    unavailable -> null
                     hit.kind == SoundCloudSearchHit.Kind.PLAYLIST && hit.streamCount > 0 ->
                         stringResource(R.string.soundcloud_playlist_count, hit.streamCount)
                     hit.durationSec > 0 -> formatDuration(hit.durationSec)
@@ -1835,7 +1852,7 @@ private fun SoundCloudResultRow(
                 }
                 IconButton(
                     onClick = onDownload,
-                    enabled = enabled,
+                    enabled = enabled && !unavailable,
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(

@@ -3,6 +3,7 @@ package com.theveloper.pixelplay.soundcloud
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -57,6 +58,11 @@ class SoundCloudSettings @Inject constructor(
 
     val isSignedIn: Flow<Boolean> = session.map { it.isSignedIn }
 
+    /** When false, SoundCloud downloads stay on the downloads tab and out of the library. */
+    val includeDownloadsInLibrary: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[Keys.INCLUDE_DOWNLOADS_IN_LIBRARY] ?: true
+    }
+
     suspend fun setClientId(value: String) {
         dataStore.edit { it[Keys.CLIENT_ID] = value.trim() }
     }
@@ -82,6 +88,10 @@ class SoundCloudSettings @Inject constructor(
         }
     }
 
+    suspend fun setIncludeDownloadsInLibrary(include: Boolean) {
+        dataStore.edit { it[Keys.INCLUDE_DOWNLOADS_IN_LIBRARY] = include }
+    }
+
     suspend fun clearSession() {
         dataStore.edit { prefs ->
             prefs.remove(Keys.OAUTH_TOKEN)
@@ -98,5 +108,6 @@ class SoundCloudSettings @Inject constructor(
         val COOKIE_HEADER = stringPreferencesKey("cookie_header")
         val DISPLAY_NAME = stringPreferencesKey("display_name")
         val PERMALINK = stringPreferencesKey("permalink")
+        val INCLUDE_DOWNLOADS_IN_LIBRARY = booleanPreferencesKey("include_downloads_in_library")
     }
 }

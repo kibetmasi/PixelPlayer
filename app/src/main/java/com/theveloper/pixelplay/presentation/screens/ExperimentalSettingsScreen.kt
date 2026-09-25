@@ -192,6 +192,7 @@ fun ExperimentalSettingsScreen(
                 val scClientId by scPrefsVm.clientId.collectAsStateWithLifecycle()
                 val scUsername by scPrefsVm.username.collectAsStateWithLifecycle()
                 val scSession by scPrefsVm.session.collectAsStateWithLifecycle()
+                val includeDownloadsInLibrary by scPrefsVm.includeDownloadsInLibrary.collectAsStateWithLifecycle()
                 var clientIdDraft by remember(scClientId) { mutableStateOf(scClientId) }
                 var usernameDraft by remember(scUsername) { mutableStateOf(scUsername) }
                 val context = LocalContext.current
@@ -264,6 +265,12 @@ fun ExperimentalSettingsScreen(
                             singleLine = true,
                             label = { Text(stringResource(R.string.soundcloud_username_label)) },
                             placeholder = { Text(stringResource(R.string.soundcloud_username_hint)) },
+                        )
+                        SwitchSettingItem(
+                            title = stringResource(R.string.soundcloud_include_downloads_in_library),
+                            subtitle = stringResource(R.string.soundcloud_include_downloads_in_library_subtitle),
+                            checked = includeDownloadsInLibrary,
+                            onCheckedChange = scPrefsVm::setIncludeDownloadsInLibrary,
                         )
                         FilledTonalButton(
                             onClick = {

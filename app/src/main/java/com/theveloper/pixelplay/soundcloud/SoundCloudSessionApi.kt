@@ -195,7 +195,7 @@ class SoundCloudSessionApi @Inject constructor() {
     }
 
     private fun trackToHit(track: JSONObject): SoundCloudSearchHit? {
-        if (isDrmOnlyTrack(track)) return null
+        if (isUnplayableTrack(track)) return null
         val url = track.optString("permalink_url").ifBlank { return null }
         val user = track.optJSONObject("user")
         val durationMs = track.optLong("duration", 0L)
@@ -208,6 +208,7 @@ class SoundCloudSessionApi @Inject constructor() {
                 .ifBlank { user?.optString("avatar_url").orEmpty() }
                 .let { if (it.isBlank()) null else upgradeArtworkUrl(it) },
             kind = SoundCloudSearchHit.Kind.TRACK,
+            availability = SoundCloudSearchHit.Availability.AVAILABLE,
         )
     }
 
@@ -247,6 +248,18 @@ class SoundCloudSessionApi @Inject constructor() {
     }
 
     /**
+     * True when the track JSON itself says it cannot be streamed: blocked, not
+     * streamable, or every audio transcoding is DRM. Usable when the payload is
+     * already in memory, so list loading does not gain extra requests.
+     */
+    internal fun isUnplayableTrack(track: JSONObject): Boolean {
+        if (track.has("streamable") && !track.optBoolean("streamable", true)) return true
+        val policy = track.optString("policy").lowercase()
+        if (policy == "block" || policy == "blocked") return true
+        return isDrmOnlyTrack(track)
+    }
+
+    /**
      * Returns true when every known audio transcoding is DRM encrypted-hls
      * (cbc-/ctr-encrypted-hls). Tracks with progressive or plain HLS stay visible.
      */
@@ -271,21 +284,60 @@ class SoundCloudSessionApi @Inject constructor() {
         return sawAny && !sawUsable
     }
 
-    /** Resolve a permalink and report whether it is DRM-only (for NewPipe list filtering). */
-    fun isDrmOnlyUrl(trackUrl: String): Boolean {
+    /**
+     * True when the permalink can stream, false when the track is blocked or DRM-only.
+     * Null when the lookup itself failed — callers must not treat that as unplayable.
+     */
+    fun playbackAvailability(trackUrl: String): Boolean? {
         return try {
-            val encoded = java.net.URLEncoder.encode(trackUrl.trim(), Charsets.UTF_8.name())
-            val json = getJson(
-                "https://api-v2.soundcloud.com/resolve?url=$encoded",
-                requireAuth = false,
-            )
-            val track = when {
-                json.has("media") || (json.has("permalink_url") && json.has("title")) -> json
-                else -> json.optJSONObject("track")
-            } ?: return false
-            isDrmOnlyTrack(track)
+            resolvedTrack(trackUrl)?.let { !isUnplayableTrack(it) }
         } catch (_: Throwable) {
-            false
+            null
+        }
+    }
+
+    /** Title, artist, album, genre, and artwork from api-v2. Null when the lookup fails. */
+    fun loadFileTags(trackUrl: String): SoundCloudFileTags? {
+        val track = try {
+            resolvedTrack(trackUrl)
+        } catch (_: Throwable) {
+            null
+        } ?: return null
+        val user = track.optJSONObject("user")
+        val publisher = track.optJSONObject("publisher_metadata")
+        val title = track.optString("title").trim()
+        if (title.isEmpty()) return null
+        val artist = publisher?.optString("artist").orEmpty().trim()
+            .ifBlank { user?.optString("username").orEmpty().trim() }
+            .ifBlank { return null }
+        val album = publisher?.optString("album_title").orEmpty().trim()
+            .ifBlank { publisher?.optString("release_title").orEmpty().trim() }
+            .ifBlank { artist }
+        val genre = track.optString("genre").trim().ifBlank { null }
+        val artwork = track.optString("artwork_url")
+            .ifBlank { user?.optString("avatar_url").orEmpty() }
+            .trim()
+            .ifBlank { null }
+            ?.let { upgradeArtworkUrl(it) }
+        return SoundCloudFileTags(
+            title = title,
+            artist = artist,
+            album = album,
+            albumArtist = artist,
+            genre = genre?.takeUnless { it.isSoundCloudPlaceholder() },
+            artworkUrl = artwork,
+        )
+    }
+
+    private fun resolvedTrack(trackUrl: String): JSONObject? {
+        val encoded = java.net.URLEncoder.encode(trackUrl.trim(), Charsets.UTF_8.name())
+        val json = getJson(
+            "https://api-v2.soundcloud.com/resolve?url=$encoded",
+            requireAuth = false,
+        )
+        return when {
+            json.has("media") || (json.has("permalink_url") && json.has("title")) -> json
+            else -> json.optJSONObject("track")
         }
     }
 

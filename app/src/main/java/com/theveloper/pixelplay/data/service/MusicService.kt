@@ -198,6 +198,7 @@ class MusicService : MediaLibraryService() {
     private var countedPlayCount = 0
     private var countedOriginalId: String? = null
     private var countedPlayListener: Player.Listener? = null
+    private var consecutivePlaybackErrorSkips = 0
     private val alarmManager by lazy {
         getSystemService(Context.ALARM_SERVICE) as AlarmManager
     }
@@ -267,6 +268,7 @@ class MusicService : MediaLibraryService() {
         private const val PLAYBACK_SNAPSHOT_DEBOUNCE_MS = 1500L
         private const val MEDIA_SESSION_BUTTON_DEBOUNCE_MS = 250L
         private const val DEFERRED_SERVICE_STARTUP_WORK_DELAY_MS = 1_000L
+        private const val MAX_PLAYBACK_ERROR_SKIPS = 8
         private const val PAUSED_RESTORE_PREPARE_QUEUE_LIMIT = 50
         private val pendingMediaButtonForegroundStarts = AtomicInteger(0)
 
@@ -1336,6 +1338,9 @@ class MusicService : MediaLibraryService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             Timber.tag(TAG).d("Playback state changed: $playbackState")
+            if (playbackState == Player.STATE_READY) {
+                consecutivePlaybackErrorSkips = 0
+            }
             if (playbackState == Player.STATE_ENDED) {
                 listeningStatsTracker.finalizeCurrentSession()
                 val mediaItem = (mediaSession?.player ?: engine.masterPlayer).currentMediaItem
@@ -1478,6 +1483,22 @@ class MusicService : MediaLibraryService() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            val player = mediaSession?.player ?: engine.masterPlayer
+            val nextIndex = player.nextMediaItemIndex
+            val canSkipToAnother = nextIndex != C.INDEX_UNSET && nextIndex != player.currentMediaItemIndex
+            if (canSkipToAnother && consecutivePlaybackErrorSkips < MAX_PLAYBACK_ERROR_SKIPS) {
+                consecutivePlaybackErrorSkips++
+                Timber.tag(TAG).w(
+                    error,
+                    "Skipping unplayable item (%d)",
+                    consecutivePlaybackErrorSkips,
+                )
+                player.seekToNextMediaItem()
+                player.prepare()
+                player.play()
+                return
+            }
+            consecutivePlaybackErrorSkips = 0
             Timber.tag(TAG).e(error, "Error en el reproductor: ")
             serviceScope.launch {
                 val currentMediaItem = mediaSession?.player?.currentMediaItem

@@ -31,6 +31,7 @@ import javax.inject.Singleton
 @Singleton
 class SoundCloudClient @Inject constructor(
     private val sessionApi: SoundCloudSessionApi,
+    private val playability: SoundCloudPlayabilityStore,
 ) {
     private val downloader = SoundCloudDownloader()
     private val runtimeClientId = AtomicReference<String?>(null)
@@ -199,6 +200,67 @@ class SoundCloudClient @Inject constructor(
             streamUrl = stream.content,
             mimeType = stream.format?.mimeType,
             artworkUrl = info.thumbnails.maxByOrNull { it.height }?.url,
+        )
+    }
+
+    fun isKnownUnplayable(url: String): Boolean = playability.isUnplayable(url)
+
+    fun knowsPlayability(url: String): Boolean = playability.knows(url)
+
+    fun rememberPlayable(url: String) {
+        playability.remember(url, playable = true)
+    }
+
+    fun rememberUnplayable(url: String) {
+        playability.remember(url, playable = false)
+    }
+
+    /**
+     * Cheap api-v2 check (no stream extraction). Null means the probe failed and
+     * the row should stay unchanged so a blip doesn't gray the whole list.
+     */
+    fun probePlayable(url: String): Boolean? {
+        val key = url.trim()
+        if (playability.isUnplayable(key)) return false
+        if (playability.knows(key)) return true
+        resolveCache[key]?.let {
+            playability.remember(key, playable = true)
+            return true
+        }
+        val playable = sessionApi.playbackAvailability(key) ?: return null
+        playability.remember(key, playable)
+        return playable
+    }
+
+    fun isPermanentStreamFailure(error: Throwable): Boolean {
+        if (looksLikeClientIdOrRateLimit(error)) return false
+        val msg = generateSequence(error) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+            .lowercase()
+        return msg.contains("no playable stream") ||
+            msg.contains("could not get any stream") ||
+            msg.contains("no progressive") ||
+            msg.contains("drm") ||
+            msg.contains("encrypted")
+    }
+
+    fun fileTags(track: SoundCloudResolvedTrack): SoundCloudFileTags {
+        val fromApi = runCatching { sessionApi.loadFileTags(track.url) }.getOrNull()
+        val artist = fromApi?.artist?.takeUnless { it.isSoundCloudPlaceholder() }
+            ?: track.artist.takeUnless { it.isSoundCloudPlaceholder() }
+            ?: "Unknown artist"
+        val title = fromApi?.title?.takeIf { it.isNotBlank() } ?: track.title
+        val album = fromApi?.album?.takeUnless { it.isSoundCloudPlaceholder() } ?: artist
+        val genre = fromApi?.genre?.takeUnless { it.isSoundCloudPlaceholder() }
+        val artwork = fromApi?.artworkUrl?.takeIf { it.isNotBlank() } ?: track.artworkUrl
+        return SoundCloudFileTags(
+            title = title,
+            artist = artist,
+            album = album,
+            albumArtist = artist,
+            genre = genre,
+            artworkUrl = artwork,
         )
     }
 

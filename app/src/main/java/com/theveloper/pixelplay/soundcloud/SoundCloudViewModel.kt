@@ -3,8 +3,10 @@ package com.theveloper.pixelplay.soundcloud
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import com.theveloper.pixelplay.data.model.Song
@@ -42,6 +46,8 @@ data class SoundCloudUiState(
     val endReached: Boolean = false,
     val likedTrackUrls: Set<String> = emptySet(),
     val likingUrl: String? = null,
+    /** Permalinks that cannot be streamed. Populated after the list is shown. */
+    val unplayableUrls: Set<String> = emptySet(),
 )
 
 @HiltViewModel
@@ -49,6 +55,7 @@ class SoundCloudViewModel @Inject constructor(
     private val client: SoundCloudClient,
     private val settings: SoundCloudSettings,
     private val downloader: SoundCloudDownloadService,
+    private val libraryGate: SoundCloudLibraryGate,
 ) : ViewModel() {
 
     private data class NavFrame(
@@ -64,7 +71,8 @@ class SoundCloudViewModel @Inject constructor(
 
     private var searchJob: Job? = null
     private var loadJob: Job? = null
-    private var artworkJob: Job? = null
+    private var repairJob: Job? = null
+    private var probeJob: Job? = null
     private var queuePrefetchJob: Job? = null
     private val artworkAttempts = mutableSetOf<String>()
     private val navStack = ArrayDeque<NavFrame>()
@@ -90,6 +98,12 @@ class SoundCloudViewModel @Inject constructor(
                         displayName = session.displayName.ifBlank { session.permalink },
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            settings.includeDownloadsInLibrary.collect { include ->
+                runCatching { libraryGate.apply(include) }
+                    .onFailure { Timber.w(it, "SoundCloud library visibility update failed") }
             }
         }
         viewModelScope.launch {
@@ -267,15 +281,50 @@ class SoundCloudViewModel @Inject constructor(
     }
 
     /**
-     * Resolves only the tapped track so playback can start immediately.
-     * Call [prefetchQueueAfter] afterward to fill upcoming songs without blocking.
+     * Resolves the tapped track, then the following tracks, until one can play.
+     * Unplayable permalinks are remembered so the list can gray them without
+     * another resolve. Playback is not stopped when a track in the list fails.
      */
-    suspend fun resolveStartForPlayback(hit: SoundCloudSearchHit): Song {
-        setBusy(hit.url)
-        return withContext(Dispatchers.IO) {
-            ensureClient()
-            client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
+    suspend fun resolvePlayableStart(
+        hit: SoundCloudSearchHit,
+        queueHits: List<SoundCloudSearchHit>,
+    ): Pair<Song, SoundCloudSearchHit> {
+        val tracks = queueHits
+            .asSequence()
+            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
+            .distinctBy { it.url }
+            .toList()
+        val startIndex = tracks.indexOfFirst { it.url == hit.url }
+        val ordered = when {
+            hit.kind == SoundCloudSearchHit.Kind.TRACK && startIndex >= 0 -> tracks.drop(startIndex)
+            hit.kind == SoundCloudSearchHit.Kind.TRACK -> listOf(hit) + tracks.filter { it.url != hit.url }
+            else -> tracks
         }
+        var lastError: Throwable? = null
+        for (candidate in ordered) {
+            if (client.isKnownUnplayable(candidate.url)) {
+                noteUnplayable(candidate.url)
+                continue
+            }
+            setBusy(candidate.url)
+            try {
+                val song = withContext(Dispatchers.IO) {
+                    ensureClient()
+                    client.toSong(client.resolveTrack(candidate.url), permalinkUrl = candidate.url)
+                }
+                client.rememberPlayable(candidate.url)
+                return song to candidate
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Throwable) {
+                if (!client.isPermanentStreamFailure(t)) throw t
+                client.rememberUnplayable(candidate.url)
+                noteUnplayable(candidate.url)
+                lastError = t
+                Timber.w(t, "Skip unplayable SoundCloud track: %s", candidate.url)
+            }
+        }
+        throw lastError ?: IllegalStateException("No playable streams in this list")
     }
 
     /**
@@ -320,11 +369,22 @@ class SoundCloudViewModel @Inject constructor(
             ensureClient()
             var first: Song? = null
             for (hit in tracks) {
+                if (client.isKnownUnplayable(hit.url)) {
+                    noteUnplayable(hit.url)
+                    continue
+                }
                 runCatching {
                     client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
                 }.onSuccess { song ->
+                    client.rememberPlayable(hit.url)
                     first = song
-                }.onFailure { Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url) }
+                }.onFailure { error ->
+                    if (client.isPermanentStreamFailure(error)) {
+                        client.rememberUnplayable(hit.url)
+                        noteUnplayable(hit.url)
+                    }
+                    Timber.w(error, "Skip unplayable SoundCloud track: %s", hit.url)
+                }
                 if (first != null) break
             }
             first ?: throw IllegalStateException("No playable streams in this list")
@@ -349,12 +409,21 @@ class SoundCloudViewModel @Inject constructor(
                 for (hit in hits) {
                     ensureActive()
                     if (hit.kind != SoundCloudSearchHit.Kind.TRACK) continue
+                    if (client.isKnownUnplayable(hit.url)) {
+                        noteUnplayable(hit.url)
+                        continue
+                    }
                     runCatching {
                         client.toSong(client.resolveTrack(hit.url), permalinkUrl = hit.url)
                     }.onSuccess { song ->
+                        client.rememberPlayable(hit.url)
                         withContext(Dispatchers.Main.immediate) { onSong(song) }
-                    }.onFailure {
-                        Timber.w(it, "Skip unplayable SoundCloud track: %s", hit.url)
+                    }.onFailure { error ->
+                        if (client.isPermanentStreamFailure(error)) {
+                            client.rememberUnplayable(hit.url)
+                            noteUnplayable(hit.url)
+                        }
+                        Timber.w(error, "Skip unplayable SoundCloud track: %s", hit.url)
                     }
                 }
             }
@@ -372,7 +441,7 @@ class SoundCloudViewModel @Inject constructor(
                 ensureClient()
                 val file = withContext(Dispatchers.IO) {
                     val track = client.resolveTrack(hit.url)
-                    downloader.downloadToMusicFolder(track)
+                    downloader.downloadToMusicFolder(track, client.fileTags(track))
                 }
                 refreshDownloads()
                 _uiState.update {
@@ -439,52 +508,72 @@ class SoundCloudViewModel @Inject constructor(
     }
 
     fun refreshDownloads() {
-        val songs = downloader.listDownloadedSongs()
+        val catalog = downloader.listDownloadedSongs()
         _uiState.update {
             it.copy(
-                downloads = songs,
+                downloads = catalog.songs,
                 results = emptyList(),
                 isLoading = false,
                 statusMessage = null,
             )
         }
-        hydrateMissingDownloadArtwork(songs)
+        repairDownloadedFiles(catalog.repairs)
     }
 
-    private fun hydrateMissingDownloadArtwork(songs: List<Song>) {
-        if (_uiState.value.clientId.isBlank()) return
-        val missing = songs.filter {
-            it.albumArtUriString.isNullOrBlank() && artworkAttempts.add(it.id)
-        }
-        if (missing.isEmpty()) return
-        artworkJob?.cancel()
-        artworkJob = viewModelScope.launch(Dispatchers.IO) {
-            ensureClient()
-            val hydrated = missing.mapNotNull { song ->
-                val query = "${song.artist} ${song.title}".trim()
-                val candidates = runCatching { client.search(query, 5) }.getOrDefault(emptyList())
-                val normalizedTitle = song.title.normalizedForArtworkMatch()
-                val match = candidates.firstOrNull {
-                    it.kind == SoundCloudSearchHit.Kind.TRACK &&
-                        it.title.normalizedForArtworkMatch() == normalizedTitle &&
-                        !it.thumbnailUrl.isNullOrBlank()
-                } ?: candidates.firstOrNull {
-                    it.kind == SoundCloudSearchHit.Kind.TRACK && !it.thumbnailUrl.isNullOrBlank()
-                }
-                val artwork = match?.thumbnailUrl ?: return@mapNotNull null
-                downloader.rememberArtwork(song, artwork)
-                song.id to artwork
-            }.toMap()
-            if (hydrated.isNotEmpty()) {
-                _uiState.update { state ->
-                    state.copy(
-                        downloads = state.downloads.map { song ->
-                            hydrated[song.id]?.let { song.copy(albumArtUriString = it) } ?: song
-                        },
-                    )
+    /**
+     * Rewrites tags and embeds cover art after the downloads list is already shown.
+     * One file at a time so opening the tab stays as fast as the MediaStore query.
+     */
+    private fun repairDownloadedFiles(songs: List<Song>) {
+        if (songs.isEmpty()) return
+        repairJob?.cancel()
+        repairJob = viewModelScope.launch(Dispatchers.IO) {
+            if (_uiState.value.clientId.isNotBlank()) ensureClient()
+            for (song in songs) {
+                ensureActive()
+                val artworkUrl = song.albumArtUriString?.takeIf { it.startsWith("http") }
+                    ?: findArtworkUrl(song)
+                val artist = song.artist.takeUnless { it.isSoundCloudPlaceholder() } ?: "Unknown artist"
+                val album = song.album.takeUnless { it.isSoundCloudPlaceholder() } ?: artist
+                val tags = SoundCloudFileTags(
+                    title = song.title,
+                    artist = artist,
+                    album = album,
+                    albumArtist = song.albumArtist?.takeUnless { it.isSoundCloudPlaceholder() } ?: artist,
+                    genre = song.genre?.takeUnless { it.isSoundCloudPlaceholder() },
+                    artworkUrl = artworkUrl,
+                )
+                val updatedArt = runCatching { downloader.rewriteTags(song, tags) }.getOrNull()
+                if (!updatedArt.isNullOrBlank()) {
+                    _uiState.update { state ->
+                        state.copy(
+                            downloads = state.downloads.map { current ->
+                                if (current.id == song.id) {
+                                    current.copy(albumArtUriString = updatedArt)
+                                } else {
+                                    current
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
+    }
+
+    private fun findArtworkUrl(song: Song): String? {
+        if (_uiState.value.clientId.isBlank() || !artworkAttempts.add(song.id)) return null
+        val query = "${song.artist} ${song.title}".trim()
+        val candidates = runCatching { client.search(query, 5) }.getOrDefault(emptyList())
+        val normalizedTitle = song.title.normalizedForArtworkMatch()
+        val match = candidates.firstOrNull {
+            it.kind == SoundCloudSearchHit.Kind.TRACK &&
+                it.title.normalizedForArtworkMatch() == normalizedTitle &&
+                !it.thumbnailUrl.isNullOrBlank()
+        } ?: candidates.firstOrNull {
+            it.kind == SoundCloudSearchHit.Kind.TRACK && !it.thumbnailUrl.isNullOrBlank()
+        }
+        return match?.thumbnailUrl
     }
 
     private fun String.normalizedForArtworkMatch(): String =
@@ -679,6 +768,47 @@ class SoundCloudViewModel @Inject constructor(
         }
     }
 
+    private fun noteUnplayable(url: String) {
+        _uiState.update { it.copy(unplayableUrls = it.unplayableUrls + url) }
+    }
+
+    /**
+     * Checks tracks that NewPipe could not classify, after the list is visible.
+     * Known results are reused. Concurrency stays low so a tap can still resolve first.
+     */
+    private fun schedulePlayabilityProbe(hits: List<SoundCloudSearchHit>) {
+        val targets = hits
+            .asSequence()
+            .filter { it.kind == SoundCloudSearchHit.Kind.TRACK }
+            .filter { it.availability == SoundCloudSearchHit.Availability.UNKNOWN }
+            .filter { !client.knowsPlayability(it.url) }
+            .distinctBy { it.url }
+            .take(PROBE_LIMIT)
+            .toList()
+        probeJob?.cancel()
+        if (targets.isEmpty()) return
+        probeJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(PROBE_START_DELAY_MS)
+            val gate = Semaphore(PROBE_CONCURRENCY)
+            coroutineScope {
+                for (hit in targets) {
+                    ensureActive()
+                    launch {
+                        gate.withPermit {
+                            ensureActive()
+                            while (_uiState.value.resolvingKey != null) {
+                                ensureActive()
+                                delay(150)
+                            }
+                            val playable = client.probePlayable(hit.url) ?: return@withPermit
+                            if (!playable) noteUnplayable(hit.url)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun runLoad(
         @Suppress("UNUSED_PARAMETER") status: String,
         cancelPrevious: Boolean = true,
@@ -689,6 +819,7 @@ class SoundCloudViewModel @Inject constructor(
     ) {
         if (cancelPrevious) {
             loadJob?.cancel()
+            probeJob?.cancel()
         }
         val job = viewModelScope.launch {
             val previousCount = _uiState.value.results.size
@@ -705,16 +836,24 @@ class SoundCloudViewModel @Inject constructor(
             try {
                 ensureClient()
                 val hits = withContext(Dispatchers.IO) { block() }
+                val visible = hits + _uiState.value.feedShelves.flatMap { shelf -> shelf.items }
+                val knownUnplayable = visible
+                    .asSequence()
+                    .map { it.url }
+                    .filter { client.isKnownUnplayable(it) }
+                    .toSet()
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         isRefreshing = false,
                         isLoadingMore = false,
                         results = hits,
+                        unplayableUrls = knownUnplayable,
                         endReached = loadingMore && hits.size <= previousCount,
                         statusMessage = null,
                     )
                 }
+                schedulePlayabilityProbe(visible)
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
                 Timber.w(t, "SoundCloud load failed")
@@ -750,5 +889,8 @@ class SoundCloudViewModel @Inject constructor(
         private const val INITIAL_LIST_SIZE = 40
         private const val PAGE_SIZE = 30
         private const val MAX_RESULTS = 200
+        private const val PROBE_LIMIT = 40
+        private const val PROBE_CONCURRENCY = 2
+        private const val PROBE_START_DELAY_MS = 450L
     }
 }
