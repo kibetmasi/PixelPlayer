@@ -52,11 +52,14 @@ import com.theveloper.pixelplay.data.preferences.EqualizerPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.ThemePreferencesRepository
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.data.repository.MusicRepository
+import com.theveloper.pixelplay.soundcloud.SoundCloudClient
 import com.theveloper.pixelplay.data.service.player.DualPlayerEngine
 import com.theveloper.pixelplay.data.service.player.TransitionController
 import com.theveloper.pixelplay.ui.glancewidget.PlayerActions
 import com.theveloper.pixelplay.utils.AlbumArtUtils
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -168,6 +171,8 @@ class MusicService : MediaLibraryService() {
     @Inject
     lateinit var listeningStatsTracker: ListeningStatsTracker
     @Inject
+    lateinit var soundCloudClient: SoundCloudClient
+    @Inject
     @AppScope
     lateinit var appScope: CoroutineScope
 
@@ -199,6 +204,7 @@ class MusicService : MediaLibraryService() {
     private var countedOriginalId: String? = null
     private var countedPlayListener: Player.Listener? = null
     private var consecutivePlaybackErrorSkips = 0
+    private val soundCloudRefreshAttempted = mutableSetOf<String>()
     private val alarmManager by lazy {
         getSystemService(Context.ALARM_SERVICE) as AlarmManager
     }
@@ -1340,6 +1346,8 @@ class MusicService : MediaLibraryService() {
             Timber.tag(TAG).d("Playback state changed: $playbackState")
             if (playbackState == Player.STATE_READY) {
                 consecutivePlaybackErrorSkips = 0
+                (mediaSession?.player ?: engine.masterPlayer).currentMediaItem?.mediaId
+                    ?.let { soundCloudRefreshAttempted.remove(it) }
             }
             if (playbackState == Player.STATE_ENDED) {
                 listeningStatsTracker.finalizeCurrentSession()
@@ -1484,31 +1492,28 @@ class MusicService : MediaLibraryService() {
 
         override fun onPlayerError(error: PlaybackException) {
             val player = mediaSession?.player ?: engine.masterPlayer
-            val nextIndex = player.nextMediaItemIndex
-            val canSkipToAnother = nextIndex != C.INDEX_UNSET && nextIndex != player.currentMediaItemIndex
-            if (canSkipToAnother && consecutivePlaybackErrorSkips < MAX_PLAYBACK_ERROR_SKIPS) {
-                consecutivePlaybackErrorSkips++
-                Timber.tag(TAG).w(
-                    error,
-                    "Skipping unplayable item (%d)",
-                    consecutivePlaybackErrorSkips,
-                )
-                player.seekToNextMediaItem()
-                player.prepare()
-                player.play()
+            val currentItem = player.currentMediaItem
+            val permalink = soundCloudPermalink(currentItem)
+            val mediaId = currentItem?.mediaId.orEmpty()
+            if (currentItem != null && !permalink.isNullOrBlank() && soundCloudRefreshAttempted.add(mediaId)) {
+                serviceScope.launch {
+                    val refreshed = refreshSoundCloudItem(currentItem, permalink)
+                    withContext(Dispatchers.Main.immediate) {
+                        val sameTrack = player.currentMediaItem?.mediaId == mediaId
+                        val oldUri = currentItem.localConfiguration?.uri
+                        val newUri = refreshed.localConfiguration?.uri
+                        if (sameTrack && newUri != null && newUri != oldUri) {
+                            player.replaceMediaItem(player.currentMediaItemIndex, refreshed)
+                            player.prepare()
+                            player.play()
+                        } else {
+                            skipUnplayableItem(player, error)
+                        }
+                    }
+                }
                 return
             }
-            consecutivePlaybackErrorSkips = 0
-            Timber.tag(TAG).e(error, "Error en el reproductor: ")
-            serviceScope.launch {
-                val currentMediaItem = mediaSession?.player?.currentMediaItem
-                val trackTitle = currentMediaItem?.mediaMetadata?.title?.toString()
-                    ?: currentMediaItem?.mediaId
-                    ?: getString(R.string.common_unknown_track)
-                val errorMessage = error.localizedMessage ?: error.message ?: "Unknown error"
-                val toastMessage = getString(R.string.player_playback_error, "$trackTitle ($errorMessage)")
-                android.widget.Toast.makeText(this@MusicService, toastMessage, android.widget.Toast.LENGTH_LONG).show()
-            }
+            skipUnplayableItem(player, error)
         }
     }
 
@@ -1733,6 +1738,8 @@ class MusicService : MediaLibraryService() {
                     albumTitle = metadata.albumTitle?.toString(),
                     artworkUri = resolveStoredArtworkUriString(metadata),
                     durationMs = durationMs,
+                    soundCloudPermalink = metadata.extras?.getString(SoundCloudClient.EXTRA_PERMALINK)
+                        ?: SoundCloudClient.permalinkForSongId(mediaItem.mediaId),
                 )
             )
         }
@@ -1804,7 +1811,7 @@ class MusicService : MediaLibraryService() {
             else -> 0
         }
 
-        val preparedItems = restoredItems.toMutableList()
+        val preparedItems = refreshSoundCloudQueue(restoredItems).toMutableList()
         preparedItems.getOrNull(resolvedIndex)?.let { currentItem ->
             val resolvedCurrentItem = runCatching { engine.resolveMediaItem(currentItem) }.getOrNull()
             if (resolvedCurrentItem != null && resolvedCurrentItem != currentItem) {
@@ -1884,6 +1891,10 @@ class MusicService : MediaLibraryService() {
             snapshotItem.durationMs?.takeIf { it > 0L }?.let {
                 putLong(MediaItemBuilder.EXTERNAL_EXTRA_DURATION, it)
             }
+            snapshotItem.soundCloudPermalink?.takeIf { it.isNotBlank() }?.let { permalink ->
+                putString(SoundCloudClient.EXTRA_PERMALINK, permalink)
+                SoundCloudClient.rememberPermalink(snapshotItem.mediaId, permalink)
+            }
         }
         metadataBuilder.setExtras(extras)
 
@@ -1892,6 +1903,59 @@ class MusicService : MediaLibraryService() {
             .setUri(MediaItemBuilder.playbackUri(snapshotItem.uri))
             .setMediaMetadata(metadataBuilder.build())
             .build()
+            .let(MediaItemBuilder::withSoundCloudPermalink)
+    }
+
+    private fun soundCloudPermalink(item: MediaItem?): String? {
+        if (item == null) return null
+        if (item.mediaId.startsWith("sc_dl_")) return null
+        return item.mediaMetadata.extras?.getString(SoundCloudClient.EXTRA_PERMALINK)
+            ?: SoundCloudClient.permalinkForSongId(item.mediaId)
+    }
+
+    private suspend fun refreshSoundCloudQueue(items: List<MediaItem>): List<MediaItem> = coroutineScope {
+        items.map { item ->
+            async(Dispatchers.IO) {
+                val permalink = soundCloudPermalink(item) ?: return@async item
+                refreshSoundCloudItem(item, permalink)
+            }
+        }.awaitAll()
+    }
+
+    private suspend fun refreshSoundCloudItem(item: MediaItem, permalink: String): MediaItem =
+        withContext(Dispatchers.IO) {
+            val streamUrl = runCatching { soundCloudClient.resolveTrack(permalink).streamUrl }.getOrNull()
+            if (streamUrl.isNullOrBlank()) return@withContext item
+            val refreshed = item.buildUpon().setUri(streamUrl).build()
+            MediaItemBuilder.withSoundCloudPermalink(refreshed)
+        }
+
+    private fun skipUnplayableItem(player: Player, error: PlaybackException) {
+        val nextIndex = player.nextMediaItemIndex
+        val canSkipToAnother = nextIndex != C.INDEX_UNSET && nextIndex != player.currentMediaItemIndex
+        if (canSkipToAnother && consecutivePlaybackErrorSkips < MAX_PLAYBACK_ERROR_SKIPS) {
+            consecutivePlaybackErrorSkips++
+            Timber.tag(TAG).w(
+                error,
+                "Skipping unplayable item (%d)",
+                consecutivePlaybackErrorSkips,
+            )
+            player.seekToNextMediaItem()
+            player.prepare()
+            player.play()
+            return
+        }
+        consecutivePlaybackErrorSkips = 0
+        Timber.tag(TAG).e(error, "Error en el reproductor: ")
+        serviceScope.launch {
+            val currentMediaItem = mediaSession?.player?.currentMediaItem
+            val trackTitle = currentMediaItem?.mediaMetadata?.title?.toString()
+                ?: currentMediaItem?.mediaId
+                ?: getString(R.string.common_unknown_track)
+            val errorMessage = error.localizedMessage ?: error.message ?: "Unknown error"
+            val toastMessage = getString(R.string.player_playback_error, "$trackTitle ($errorMessage)")
+            android.widget.Toast.makeText(this@MusicService, toastMessage, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun getOpenAppPendingIntent(): PendingIntent {

@@ -40,7 +40,6 @@ class SoundCloudClient @Inject constructor(
     private val downloader = SoundCloudDownloader()
     private val runtimeClientId = AtomicReference<String?>(null)
     private val resolveCache = ConcurrentHashMap<String, CachedResolve>()
-    private val permalinkBySongId = ConcurrentHashMap<String, String>()
     private val _likedPermalinks = MutableStateFlow<Set<String>>(emptySet())
     val likedPermalinks: StateFlow<Set<String>> = _likedPermalinks.asStateFlow()
 
@@ -109,7 +108,7 @@ class SoundCloudClient @Inject constructor(
         _likedPermalinks.update { it + clean }
     }
 
-    fun permalinkForSong(songId: String): String? = permalinkBySongId[songId]
+    fun permalinkForSong(songId: String): String? = permalinkForSongId(songId)
 
     @Throws(Exception::class)
     fun loadDiscover(limit: Int = 30): List<SoundCloudSearchHit> {
@@ -286,7 +285,7 @@ class SoundCloudClient @Inject constructor(
         // Prefer the list permalink so UI can match the now-playing row without resolving again.
         val id = songIdForUrl(permalinkUrl.ifBlank { track.url })
         val permalink = permalinkUrl.ifBlank { track.url }.trim()
-        if (permalink.isNotEmpty()) permalinkBySongId[id] = permalink
+        if (permalink.isNotEmpty()) rememberPermalink(id, permalink)
         return Song(
             id = id,
             title = track.title,
@@ -477,8 +476,18 @@ class SoundCloudClient @Inject constructor(
     private fun soundCloud(): SoundcloudService = ServiceList.SoundCloud
 
     companion object {
+        const val EXTRA_PERMALINK = "com.theveloper.pixelplay.soundcloud.PERMALINK"
+        private val permalinkBySongId = ConcurrentHashMap<String, String>()
         private val initialized = AtomicBoolean(false)
         private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
+
+        fun rememberPermalink(songId: String, permalink: String) {
+            val id = songId.trim()
+            val url = permalink.trim()
+            if (id.isNotEmpty() && url.startsWith("http")) permalinkBySongId[id] = url
+        }
+
+        fun permalinkForSongId(songId: String): String? = permalinkBySongId[songId]
 
         fun songIdForUrl(url: String): String =
             "sc_${url.trim().hashCode().toUInt()}"

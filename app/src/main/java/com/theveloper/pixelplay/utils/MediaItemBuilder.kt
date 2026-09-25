@@ -13,6 +13,7 @@ import androidx.media3.common.MediaMetadata.PICTURE_TYPE_FRONT_COVER
 import androidx.media3.common.util.UnstableApi
 import com.theveloper.pixelplay.data.provider.SharedArtworkContentProvider
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.soundcloud.SoundCloudClient
 import java.io.File
 
 object MediaItemBuilder {
@@ -99,12 +100,14 @@ object MediaItemBuilder {
     const val EXTERNAL_EXTRA_NAVIDROME_ID = EXTERNAL_EXTRA_PREFIX + "NAVIDROME_ID"
 
     fun build(song: Song): MediaItem {
-        return MediaItem.Builder()
-            .setMediaId(song.id)
-            .setUri(playbackUri(song))
-            .setMimeType(playbackMimeType(song))
-            .setMediaMetadata(buildMediaMetadataForSong(song))
-            .build()
+        return withSoundCloudPermalink(
+            MediaItem.Builder()
+                .setMediaId(song.id)
+                .setUri(playbackUri(song))
+                .setMimeType(playbackMimeType(song))
+                .setMediaMetadata(buildMediaMetadataForSong(song))
+                .build(),
+        )
     }
 
     fun buildForExternalController(context: Context, song: Song): MediaItem {
@@ -124,7 +127,20 @@ object MediaItemBuilder {
                     )
                 )
                 .build()
+                .let(::withSoundCloudPermalink)
         }
+    }
+
+    fun withSoundCloudPermalink(item: MediaItem): MediaItem {
+        val permalink = item.mediaMetadata.extras?.getString(SoundCloudClient.EXTRA_PERMALINK)
+            ?: SoundCloudClient.permalinkForSongId(item.mediaId)
+            ?: return item
+        val metadata = item.mediaMetadata
+        val extras = Bundle(metadata.extras ?: Bundle())
+        extras.putString(SoundCloudClient.EXTRA_PERMALINK, permalink)
+        return item.buildUpon()
+            .setMediaMetadata(metadata.buildUpon().setExtras(extras).build())
+            .build()
     }
 
     fun playbackUri(song: Song): Uri = playbackUri(

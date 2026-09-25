@@ -11,6 +11,7 @@ data class PlaybackQueueItemSnapshot(
     val albumTitle: String? = null,
     val artworkUri: String? = null,
     val durationMs: Long? = null,
+    val soundCloudPermalink: String? = null,
 )
 
 @Serializable
