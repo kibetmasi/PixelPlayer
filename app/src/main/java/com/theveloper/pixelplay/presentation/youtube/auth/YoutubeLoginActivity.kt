@@ -61,6 +61,8 @@ class YoutubeLoginActivity : ComponentActivity() {
         const val TARGET_URL = "https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2F&hl=en"
         const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        const val DESKTOP_VIEWPORT =
+            "(function(){var meta=document.querySelector('meta[name=viewport]');if(!meta){meta=document.createElement('meta');meta.name='viewport';(document.head||document.documentElement).appendChild(meta);}meta.setAttribute('content','width=1280');})();"
     }
 }
 
@@ -145,6 +147,10 @@ private fun YoutubeWebView(
                 settings.domStorageEnabled = true
                 settings.cacheMode = WebSettings.LOAD_DEFAULT
                 settings.userAgentString = YoutubeLoginActivity.DESKTOP_UA
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+                settings.setSupportZoom(true)
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 webChromeClient = object : WebChromeClient() {
@@ -153,7 +159,12 @@ private fun YoutubeWebView(
                     }
                 }
                 webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                        view?.settings?.userAgentString = YoutubeLoginActivity.DESKTOP_UA
+                    }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
+                        view?.evaluateJavascript(YoutubeLoginActivity.DESKTOP_VIEWPORT, null)
                         onCookiesMaybeReady()
                     }
                 }
