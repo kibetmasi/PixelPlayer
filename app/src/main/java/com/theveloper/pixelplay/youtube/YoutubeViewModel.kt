@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 import javax.inject.Inject
 
 data class YoutubeUiState(
@@ -41,6 +42,7 @@ class YoutubeViewModel @Inject constructor(
     val savedSongIds: StateFlow<Set<String>> = musicStore.savedSongIds
     val account: StateFlow<YoutubeAccount> = session.account
     private var searchJob: Job? = null
+    private var likedJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -203,15 +205,24 @@ class YoutubeViewModel @Inject constructor(
     }
 
     fun signOut() {
+        likedJob?.cancel()
         session.clear()
         client.likedHits = emptyList()
         client.feedShelves = emptyList()
-        if (_uiState.value.section == YoutubeSection.LIKED) loadLiked(refreshing = true)
-        if (_uiState.value.section == YoutubeSection.HOME) loadFeed(refreshing = true)
+        _uiState.update {
+            it.copy(error = null, results = emptyList(), isLoading = false, isRefreshing = false)
+        }
+        when (_uiState.value.section) {
+            YoutubeSection.LIKED -> loadLiked(refreshing = false)
+            YoutubeSection.HOME -> loadFeed(refreshing = true)
+            else -> Unit
+        }
     }
 
     private fun loadLiked(refreshing: Boolean = false) {
-        viewModelScope.launch {
+        likedJob?.cancel()
+        val epoch = session.generation()
+        likedJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isLoading = !refreshing && it.results.isEmpty(),
@@ -220,18 +231,35 @@ class YoutubeViewModel @Inject constructor(
                 )
             }
             val local = musicStore.liked.value
-            val remote = if (session.isSignedIn()) {
-                runCatching { withContext(Dispatchers.IO) { client.loadLikedVideos() } }
+            val remote = if (session.isSignedIn() && session.generation() == epoch) {
+                try {
+                    Result.success(withContext(Dispatchers.IO) { client.loadLikedVideos() })
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Result.failure(error)
+                }
             } else {
                 Result.success(emptyList())
             }
+            if (session.generation() != epoch) return@launch
             remote.fold(
                 onSuccess = { accountLikes ->
-                    val merged = (accountLikes + local).distinctBy { it.url }
-                    if (accountLikes.isNotEmpty()) client.likedHits = accountLikes
-                    _uiState.update { it.copy(isLoading = false, isRefreshing = false, results = merged) }
+                    if (session.generation() != epoch) return@launch
+                    val account = if (session.isSignedIn()) accountLikes else emptyList()
+                    val merged = (account + local).distinctBy { it.url }
+                    client.likedHits = account
+                    _uiState.update {
+                        it.copy(isLoading = false, isRefreshing = false, error = null, results = merged)
+                    }
                 },
                 onFailure = { error ->
+                    if (session.generation() != epoch || !session.isSignedIn()) {
+                        _uiState.update {
+                            it.copy(isLoading = false, isRefreshing = false, error = null, results = local)
+                        }
+                        return@fold
+                    }
                     _uiState.update {
                         it.copy(
                             isLoading = false,

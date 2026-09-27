@@ -6,6 +6,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -54,16 +55,21 @@ internal class YoutubeDownloader : Downloader() {
         }
     }
 
-    fun postJson(url: String, json: String): String {
+    fun postJson(url: String, json: String, origin: String = "https://www.youtube.com"): String {
+        val cookies = cookieHeader?.trim().orEmpty()
         val request = okhttp3.Request.Builder()
             .url(url)
             .post(json.toRequestBody(JSON))
             .header("User-Agent", USER_AGENT)
             .header("Content-Type", "application/json")
-            .header("Origin", "https://www.youtube.com")
-            .header("Referer", "https://www.youtube.com/")
+            .header("Origin", origin)
+            .header("Referer", "$origin/")
+            .header("X-Origin", origin)
             .apply {
-                cookieHeader?.trim()?.takeIf { it.isNotEmpty() }?.let { header("Cookie", it) }
+                if (cookies.isNotEmpty()) {
+                    header("Cookie", cookies)
+                    authorization(cookies, origin)?.let { header("Authorization", it) }
+                }
             }
             .build()
         client.newCall(request).execute().use { response ->
@@ -79,5 +85,22 @@ internal class YoutubeDownloader : Downloader() {
         private val JSON = "application/json".toMediaType()
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
+        private fun authorization(cookies: String, origin: String): String? {
+            val values = cookies.split(';')
+                .map { it.trim() }
+                .filter { it.contains('=') }
+                .associate { part ->
+                    val index = part.indexOf('=')
+                    part.substring(0, index) to part.substring(index + 1)
+                }
+            val sapisid = values["SAPISID"].orEmpty().ifBlank { values["__Secure-3PAPISID"].orEmpty() }
+            if (sapisid.isBlank()) return null
+            val timestamp = System.currentTimeMillis() / 1000
+            val digest = MessageDigest.getInstance("SHA-1")
+                .digest("$timestamp $sapisid $origin".toByteArray())
+            val hash = digest.joinToString("") { byte -> "%02x".format(byte) }
+            return "SAPISIDHASH ${timestamp}_$hash"
+        }
     }
 }

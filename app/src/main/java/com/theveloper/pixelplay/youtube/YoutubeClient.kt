@@ -83,18 +83,29 @@ class YoutubeClient @Inject constructor(
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        listOf("VLLl", "FEmusic_liked_videos").forEach { browseId ->
+        val requests = listOf(
+            Triple(
+                "VLLl",
+                "WEB",
+                "https://www.youtube.com",
+            ),
+            Triple(
+                "FEmusic_liked_videos",
+                "WEB_REMIX",
+                "https://music.youtube.com",
+            ),
+        )
+        requests.forEach { (browseId, clientName, origin) ->
             if (hits.size >= limit) return hits.take(limit).toList()
+            val version = if (clientName == "WEB_REMIX") "1.20250922.01.00" else "2.20250301.01.00"
             val body = """
-                {"context":{"client":{"clientName":"WEB","clientVersion":"2.20250301.01.00","hl":"en","gl":"US"}},"browseId":"$browseId"}
+                {"context":{"client":{"clientName":"$clientName","clientVersion":"$version","hl":"en","gl":"US"}},"browseId":"$browseId"}
             """.trim()
             val json = runCatching {
-                downloader.postJson("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", body)
+                downloader.postJson("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", body, origin)
             }.getOrNull() ?: return@forEach
-            collectVideoHits(JSONObject(json), hits, limit)
-        }
-        if (hits.isEmpty()) {
-            throw IllegalStateException("Couldn't read liked videos from this session. Sign in again from Account.")
+            val root = runCatching { JSONObject(json) }.getOrNull() ?: return@forEach
+            collectVideoHits(root, hits, limit)
         }
         return hits.take(limit).toList()
     }
@@ -225,15 +236,23 @@ class YoutubeClient @Inject constructor(
         if (hits.size >= limit || node == null) return
         when (node) {
             is JSONObject -> {
-                val videoId = node.optString("videoId")
-                if (videoId.length == 11 && node.has("title")) {
-                    val title = jsonText(node.optJSONObject("title"))
+                val videoId = node.optString("videoId").ifBlank {
+                    node.optJSONObject("playlistItemData")?.optString("videoId").orEmpty()
+                }.ifBlank {
+                    node.optJSONObject("navigationEndpoint")
+                        ?.optJSONObject("watchEndpoint")
+                        ?.optString("videoId")
+                        .orEmpty()
+                }
+                if (videoId.length == 11) {
+                    val title = videoTitle(node)
                     if (title.isNotBlank()) {
                         hits += YoutubeHit(
                             url = "https://www.youtube.com/watch?v=$videoId",
                             title = title,
                             artist = jsonText(node.optJSONObject("ownerText"))
                                 .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
+                                .ifBlank { flexColumnText(node, 1) }
                                 .ifBlank { "YouTube Music" },
                             durationSec = 0,
                             thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hqdefault.jpg"),
@@ -253,6 +272,19 @@ class YoutubeClient @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun videoTitle(node: JSONObject): String {
+        jsonText(node.optJSONObject("title")).takeIf { it.isNotBlank() }?.let { return it }
+        return flexColumnText(node, 0)
+    }
+
+    private fun flexColumnText(node: JSONObject, column: Int): String {
+        val flex = node.optJSONArray("flexColumns") ?: return ""
+        val text = flex.optJSONObject(column)
+            ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+            ?.optJSONObject("text")
+        return jsonText(text)
     }
 
     private fun jsonText(node: JSONObject?): String {
