@@ -1,93 +1,75 @@
 package com.theveloper.pixelplay.presentation.youtube.auth
 
-import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
-import android.webkit.CookieManager
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import com.theveloper.pixelplay.ui.theme.PixelPlayTheme
-import com.theveloper.pixelplay.youtube.YoutubeSession
+import com.theveloper.pixelplay.youtube.YoutubeViewModel
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
 
 @AndroidEntryPoint
 class YoutubeLoginActivity : ComponentActivity() {
-
-    @Inject
-    lateinit var session: YoutubeSession
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             PixelPlayTheme {
-                YoutubeWebLoginScreen(
-                    onClose = { finish() },
-                    onSignedIn = { cookies ->
-                        session.save(cookies)
-                        finish()
-                    },
-                )
+                YoutubeBrowserSignInScreen(onClose = { finish() })
             }
         }
     }
 
     companion object {
-        const val TARGET_URL =
-            "https://accounts.google.com/ServiceLogin?service=youtube&passive=true" +
-                "&continue=https%3A%2F%2Fwww.youtube.com%2F&hl=en"
-        const val DESKTOP_UA =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/124.0.0.0 Safari/537.36"
+        const val YOUTUBE_HOME = "https://www.youtube.com/"
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun YoutubeWebLoginScreen(
+private fun YoutubeBrowserSignInScreen(
     onClose: () -> Unit,
-    onSignedIn: (cookieHeader: String) -> Unit,
+    viewModel: YoutubeViewModel = hiltViewModel(),
 ) {
-    var progress by remember { mutableIntStateOf(0) }
-    var webView by remember { mutableStateOf<WebView?>(null) }
-
-    BackHandler { onClose() }
-
+    val context = LocalContext.current
+    var cookies by remember { mutableStateOf("") }
+    BackHandler(onBack = onClose)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -100,25 +82,7 @@ private fun YoutubeWebLoginScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null)
-                    }
-                },
-                actions = {
-                    TextButton(
-                        onClick = {
-                            val cookies = extractYoutubeSession()
-                            if (cookies != null) {
-                                onSignedIn(cookies)
-                            } else {
-                                Toast.makeText(
-                                    webView?.context,
-                                    R.string.youtube_sign_in_incomplete,
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                        },
-                    ) {
-                        Text(stringResource(R.string.youtube_sign_in_done), fontFamily = GoogleSansRounded)
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.youtube_back))
                     }
                 },
             )
@@ -127,88 +91,47 @@ private fun YoutubeWebLoginScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (progress in 1..99) {
-                LinearProgressIndicator(
-                    progress = { progress / 100f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            Text(
+                text = stringResource(R.string.youtube_signin_browser_body),
+                fontFamily = GoogleSansRounded,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(YoutubeLoginActivity.YOUTUBE_HOME)),
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.youtube_open_chrome), fontFamily = GoogleSansRounded)
             }
-            Box(Modifier.fillMaxSize()) {
-                YoutubeWebView(
-                    onProgress = { progress = it },
-                    onWebViewCreated = { webView = it },
-                    onCookiesMaybeReady = {
-                        val cookies = extractYoutubeSession()
-                        if (cookies != null) onSignedIn(cookies)
-                    },
-                )
+            OutlinedTextField(
+                value = cookies,
+                onValueChange = { cookies = it },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 4,
+                label = { Text(stringResource(R.string.youtube_cookie_label)) },
+            )
+            Button(
+                onClick = {
+                    val saved = viewModel.importSession(cookies)
+                    if (saved) {
+                        onClose()
+                    } else {
+                        Toast.makeText(context, R.string.youtube_cookie_invalid, Toast.LENGTH_LONG).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = cookies.isNotBlank(),
+            ) {
+                Text(stringResource(R.string.youtube_cookie_save), fontFamily = GoogleSansRounded)
             }
         }
     }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun YoutubeWebView(
-    onProgress: (Int) -> Unit,
-    onWebViewCreated: (WebView) -> Unit,
-    onCookiesMaybeReady: () -> Unit,
-) {
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            WebView(ctx).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.cacheMode = WebSettings.LOAD_DEFAULT
-                settings.userAgentString = YoutubeLoginActivity.DESKTOP_UA
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                webChromeClient = object : WebChromeClient() {
-                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                        onProgress(newProgress)
-                    }
-                }
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        onCookiesMaybeReady()
-                    }
-                }
-                loadUrl(YoutubeLoginActivity.TARGET_URL)
-                onWebViewCreated(this)
-            }
-        },
-    )
-}
-
-internal fun extractYoutubeSession(): String? {
-    val manager = CookieManager.getInstance()
-    val parts = listOf(
-        "https://www.youtube.com",
-        "https://youtube.com",
-        "https://music.youtube.com",
-        "https://accounts.google.com",
-        "https://google.com",
-    ).map { manager.getCookie(it).orEmpty() }
-    val map = linkedMapOf<String, String>()
-    parts.joinToString("; ")
-        .split(';')
-        .map { it.trim() }
-        .filter { it.contains('=') }
-        .forEach { part ->
-            val index = part.indexOf('=')
-            val key = part.substring(0, index).trim()
-            val value = part.substring(index + 1).trim()
-            if (key.isNotEmpty() && value.isNotEmpty()) map[key] = value
-        }
-    val signedIn = map.keys.any { key ->
-        key.equals("LOGIN_INFO", ignoreCase = true) ||
-            key.equals("SAPISID", ignoreCase = true) ||
-            key.equals("__Secure-1PSID", ignoreCase = true) ||
-            key.equals("__Secure-3PSID", ignoreCase = true)
-    }
-    if (!signedIn) return null
-    return map.entries.joinToString("; ") { "${it.key}=${it.value}" }
 }

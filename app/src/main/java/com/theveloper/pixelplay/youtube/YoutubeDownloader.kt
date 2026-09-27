@@ -1,5 +1,6 @@
 package com.theveloper.pixelplay.youtube
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.schabi.newpipe.extractor.downloader.Downloader
@@ -53,7 +54,29 @@ internal class YoutubeDownloader : Downloader() {
         }
     }
 
+    fun postJson(url: String, json: String): String {
+        val request = okhttp3.Request.Builder()
+            .url(url)
+            .post(json.toRequestBody(JSON))
+            .header("User-Agent", USER_AGENT)
+            .header("Content-Type", "application/json")
+            .header("Origin", "https://www.youtube.com")
+            .header("Referer", "https://www.youtube.com/")
+            .apply {
+                cookieHeader?.trim()?.takeIf { it.isNotEmpty() }?.let { header("Cookie", it) }
+            }
+            .build()
+        client.newCall(request).execute().use { response ->
+            val responseBody = response.body.string()
+            if (!response.isSuccessful) {
+                throw java.io.IOException("YouTube browse failed (${response.code})")
+            }
+            return responseBody
+        }
+    }
+
     companion object {
+        private val JSON = "application/json".toMediaType()
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
     }

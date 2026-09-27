@@ -215,10 +215,12 @@
     public static int i(...);
 }
 
-# NewPipe Extractor (SoundCloud)
+# NewPipe Extractor reads protobuf fields by name (browseId_). R8 must not rename them.
+-keep class org.schabi.newpipe.extractor.** { *; }
 -keep class org.schabi.newpipe.extractor.timeago.patterns.** { *; }
 -keep class org.mozilla.javascript.** { *; }
 -keep class org.mozilla.javascript.XMLLib.** { *; }
+-keep class com.google.protobuf.** { *; }
 -dontwarn org.mozilla.javascript.XMLLib
 -dontwarn org.schabi.newpipe.extractor.**
 

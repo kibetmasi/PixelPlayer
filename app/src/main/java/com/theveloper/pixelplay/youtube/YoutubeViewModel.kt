@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.theveloper.pixelplay.data.model.Song
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +40,7 @@ class YoutubeViewModel @Inject constructor(
     val likedSongIds: StateFlow<Set<String>> = musicStore.likedSongIds
     val savedSongIds: StateFlow<Set<String>> = musicStore.savedSongIds
     val account: StateFlow<YoutubeAccount> = session.account
+    private var searchJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -64,22 +67,48 @@ class YoutubeViewModel @Inject constructor(
             it.copy(section = section, collectionTitle = null, error = null)
         }
         when (section) {
-            YoutubeSection.HOME -> loadFeed()
+            YoutubeSection.HOME -> {
+                if (client.feedShelves.isNotEmpty()) {
+                    _uiState.update { it.copy(shelves = client.feedShelves, isLoading = false) }
+                }
+                loadFeed(refreshing = client.feedShelves.isNotEmpty())
+            }
             YoutubeSection.SEARCH -> {
                 if (_uiState.value.query.trim().length >= 2) search(_uiState.value.query)
                 else _uiState.update { it.copy(results = emptyList(), shelves = emptyList(), isLoading = false) }
             }
-            YoutubeSection.LIKED -> loadLiked()
-            YoutubeSection.PLAYLISTS -> loadPlaylists()
-            YoutubeSection.RADIO -> loadRadioStations()
+            YoutubeSection.LIKED -> {
+                if (client.likedHits.isNotEmpty()) {
+                    _uiState.update { it.copy(results = client.likedHits, isLoading = false) }
+                }
+                loadLiked(refreshing = client.likedHits.isNotEmpty())
+            }
+            YoutubeSection.PLAYLISTS -> {
+                if (client.playlistHits.isNotEmpty()) {
+                    _uiState.update { it.copy(results = client.playlistHits, isLoading = false) }
+                }
+                loadPlaylists(refreshing = client.playlistHits.isNotEmpty())
+            }
+            YoutubeSection.RADIO -> {
+                if (client.radioHits.isNotEmpty()) {
+                    _uiState.update { it.copy(results = client.radioHits, isLoading = false) }
+                }
+                loadRadioStations(refreshing = client.radioHits.isNotEmpty())
+            }
             YoutubeSection.SAVED -> _uiState.update { it.copy(results = emptyList(), shelves = emptyList(), isLoading = false) }
         }
     }
 
     fun onQueryChange(query: String) {
-        _uiState.update { it.copy(query = query, error = null) }
-        if (query.trim().length >= 2) search(query) else {
-            _uiState.update { it.copy(results = emptyList(), isLoading = false, collectionTitle = null) }
+        _uiState.update { it.copy(query = query, error = null, collectionTitle = null) }
+        searchJob?.cancel()
+        if (query.trim().length < 2) {
+            _uiState.update { it.copy(results = emptyList(), isLoading = false) }
+            return
+        }
+        searchJob = viewModelScope.launch {
+            delay(250)
+            search(query)
         }
     }
 
@@ -154,6 +183,17 @@ class YoutubeViewModel @Inject constructor(
         musicStore.toggleSave(hit)
     }
 
+    fun importSession(cookieHeader: String): Boolean {
+        val normalized = cookieHeader.trim()
+        val signedIn = listOf("LOGIN_INFO", "SAPISID", "__Secure-1PSID", "__Secure-3PSID")
+            .any { key -> normalized.contains("$key=", ignoreCase = true) }
+        if (!signedIn) return false
+        session.save(normalized)
+        if (_uiState.value.section == YoutubeSection.LIKED) loadLiked(refreshing = true)
+        if (_uiState.value.section == YoutubeSection.HOME) loadFeed(refreshing = true)
+        return true
+    }
+
     fun signOut() {
         session.clear()
         if (_uiState.value.section == YoutubeSection.LIKED) loadLiked(refreshing = true)
@@ -177,6 +217,7 @@ class YoutubeViewModel @Inject constructor(
             remote.fold(
                 onSuccess = { accountLikes ->
                     val merged = (accountLikes + local).distinctBy { it.url }
+                    if (accountLikes.isNotEmpty()) client.likedHits = accountLikes
                     _uiState.update { it.copy(isLoading = false, isRefreshing = false, results = merged) }
                 },
                 onFailure = { error ->
@@ -250,6 +291,7 @@ class YoutubeViewModel @Inject constructor(
             }
             built.fold(
                 onSuccess = { shelves ->
+                    client.feedShelves = shelves
                     _uiState.update { it.copy(isLoading = false, isRefreshing = false, shelves = shelves) }
                 },
                 onFailure = { error ->
@@ -279,6 +321,7 @@ class YoutubeViewModel @Inject constructor(
             }
             loaded.fold(
                 onSuccess = { hits ->
+                    client.playlistHits = hits
                     _uiState.update { it.copy(isLoading = false, isRefreshing = false, results = hits) }
                 },
                 onFailure = { error ->
@@ -298,6 +341,7 @@ class YoutubeViewModel @Inject constructor(
             val loaded = runCatching { withContext(Dispatchers.IO) { client.loadTrendingMusic(16) } }
             loaded.fold(
                 onSuccess = { hits ->
+                    client.radioHits = hits
                     _uiState.update { it.copy(isLoading = false, isRefreshing = false, results = hits) }
                 },
                 onFailure = { error ->

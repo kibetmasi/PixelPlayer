@@ -55,10 +55,11 @@ PixelPlayer plays YouTube audio through the existing player. It does not scan a 
 
 Liked videos and the “channels you follow” shelf need the Google account you use on YouTube.
 
-1. On **Feed**, tap the **account** icon in the colored header (Beta, account, changelog, settings).
-2. Tap **Sign in with Google**.
-3. Sign in inside the app, then tap **Done**.
-4. Open **Liked** to load that account’s liked videos.
+1. On **Feed**, tap the **account** icon.
+2. Tap **Sign in with Google**, then **Open YouTube in Chrome**, and sign in there. Google blocks the in-app page (“browser or app may not be secure”).
+3. On a computer, open [youtube.com](https://www.youtube.com) while signed in. Press **F12** → **Network** → click a `youtube.com` request → copy the **Cookie** request header.
+4. Paste that header into **Account** and tap **Save session**.
+5. Open **Liked** to load that account’s liked videos.
 
 **Sign out** is on the same Account screen. The heart on a song still saves a like on the device if you are signed out.
 

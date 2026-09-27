@@ -7,6 +7,8 @@ import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.kiosk.KioskInfo
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
+import org.json.JSONArray
+import org.json.JSONObject
 import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.services.youtube.YoutubeService
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
@@ -26,6 +28,10 @@ class YoutubeClient @Inject constructor(
 ) {
     private val downloader = YoutubeDownloader()
     private val resolveCache = ConcurrentHashMap<String, CachedResolve>()
+    @Volatile var feedShelves: List<YoutubeShelf> = emptyList()
+    @Volatile var playlistHits: List<YoutubeHit> = emptyList()
+    @Volatile var radioHits: List<YoutubeHit> = emptyList()
+    @Volatile var likedHits: List<YoutubeHit> = emptyList()
 
     private data class CachedResolve(
         val track: YoutubeResolvedTrack,
@@ -76,13 +82,21 @@ class YoutubeClient @Inject constructor(
     fun loadLikedVideos(limit: Int = 50): List<YoutubeHit> {
         applySession()
         if (!session.isSignedIn()) return emptyList()
-        val info = PlaylistInfo.getInfo(youtube(), "https://www.youtube.com/playlist?list=LL")
-        return info.relatedItems
-            .asSequence()
-            .mapNotNull { it.toHitOrNull() }
-            .filter { it.url.isNotBlank() && it.kind == YoutubeHit.Kind.TRACK }
-            .take(limit)
-            .toList()
+        val hits = linkedSetOf<YoutubeHit>()
+        listOf("VLLl", "FEmusic_liked_videos").forEach { browseId ->
+            if (hits.size >= limit) return hits.take(limit).toList()
+            val body = """
+                {"context":{"client":{"clientName":"WEB","clientVersion":"2.20250301.01.00","hl":"en","gl":"US"}},"browseId":"$browseId"}
+            """.trim()
+            val json = runCatching {
+                downloader.postJson("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", body)
+            }.getOrNull() ?: return@forEach
+            collectVideoHits(JSONObject(json), hits, limit)
+        }
+        if (hits.isEmpty()) {
+            throw IllegalStateException("Couldn't read liked videos from this session. Sign in again from Account.")
+        }
+        return hits.take(limit).toList()
     }
 
     fun loadSubscriptionFeed(limit: Int = 20): List<YoutubeHit> {
@@ -135,7 +149,7 @@ class YoutubeClient @Inject constructor(
             durationMs = info.duration.coerceAtLeast(0L) * 1000L,
             streamUrl = stream.content,
             mimeType = stream.format?.mimeType,
-            artworkUrl = info.thumbnails.maxByOrNull { it.height }?.url,
+            artworkUrl = fullBleedArtwork(info.thumbnails.maxByOrNull { it.height }?.url),
         )
         resolveCache[key] = CachedResolve(resolved, System.currentTimeMillis())
         return resolved
@@ -207,13 +221,58 @@ class YoutubeClient @Inject constructor(
         field.set(null, cookie)
     }
 
+    private fun collectVideoHits(node: Any?, hits: MutableSet<YoutubeHit>, limit: Int) {
+        if (hits.size >= limit || node == null) return
+        when (node) {
+            is JSONObject -> {
+                val videoId = node.optString("videoId")
+                if (videoId.length == 11 && node.has("title")) {
+                    val title = jsonText(node.optJSONObject("title"))
+                    if (title.isNotBlank()) {
+                        hits += YoutubeHit(
+                            url = "https://www.youtube.com/watch?v=$videoId",
+                            title = title,
+                            artist = jsonText(node.optJSONObject("ownerText"))
+                                .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
+                                .ifBlank { "YouTube Music" },
+                            durationSec = 0,
+                            thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hqdefault.jpg"),
+                            kind = YoutubeHit.Kind.TRACK,
+                        )
+                    }
+                }
+                val keys = node.keys()
+                while (keys.hasNext() && hits.size < limit) {
+                    collectVideoHits(node.opt(keys.next()), hits, limit)
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until node.length()) {
+                    if (hits.size >= limit) return
+                    collectVideoHits(node.opt(index), hits, limit)
+                }
+            }
+        }
+    }
+
+    private fun jsonText(node: JSONObject?): String {
+        if (node == null) return ""
+        node.optString("simpleText").takeIf { it.isNotBlank() }?.let { return it }
+        val runs = node.optJSONArray("runs") ?: return ""
+        return buildString {
+            for (index in 0 until runs.length()) {
+                append(runs.optJSONObject(index)?.optString("text").orEmpty())
+            }
+        }
+    }
+
     private fun InfoItem.toHitOrNull(): YoutubeHit? = when (this) {
         is StreamInfoItem -> YoutubeHit(
             url = url.orEmpty(),
             title = name.orEmpty().ifBlank { "Unknown title" },
             artist = uploaderName.orEmpty().ifBlank { "YouTube Music" },
             durationSec = duration.coerceAtLeast(0L),
-            thumbnailUrl = thumbnails.maxByOrNull { it.height }?.url,
+            thumbnailUrl = fullBleedArtwork(thumbnails.maxByOrNull { it.height }?.url),
             kind = YoutubeHit.Kind.TRACK,
         )
         is PlaylistInfoItem -> YoutubeHit(
@@ -221,7 +280,7 @@ class YoutubeClient @Inject constructor(
             title = name.orEmpty().ifBlank { "Playlist" },
             artist = uploaderName.orEmpty().ifBlank { "YouTube Music" },
             durationSec = 0L,
-            thumbnailUrl = thumbnails.maxByOrNull { it.height }?.url,
+            thumbnailUrl = fullBleedArtwork(thumbnails.maxByOrNull { it.height }?.url),
             kind = YoutubeHit.Kind.COLLECTION,
         )
         else -> null
@@ -261,6 +320,14 @@ class YoutubeClient @Inject constructor(
         fun watchUrlForSongId(songId: String): String? = watchUrlBySongId[songId]
 
         fun songIdForUrl(url: String): String = "yt_${url.trim().hashCode().toUInt()}"
+
+        fun fullBleedArtwork(url: String?): String? {
+            val raw = url?.trim().orEmpty()
+            if (raw.isEmpty()) return null
+            val videoId = Regex("/vi/([A-Za-z0-9_-]{6,})/").find(raw)?.groupValues?.getOrNull(1)
+                ?: return raw
+            return "https://i.ytimg.com/vi/$videoId/hq720.jpg"
+        }
 
         private fun ensureInitialized(downloader: YoutubeDownloader) {
             if (initialized.compareAndSet(false, true)) {

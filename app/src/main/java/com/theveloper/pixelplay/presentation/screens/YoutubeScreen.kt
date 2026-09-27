@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Login
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material3.Button
@@ -72,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -100,6 +102,7 @@ import com.theveloper.pixelplay.presentation.components.ChangelogBottomSheet
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.youtube.auth.YoutubeLoginActivity
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import com.theveloper.pixelplay.youtube.YoutubeClient
 import com.theveloper.pixelplay.youtube.YoutubeHit
 import com.theveloper.pixelplay.youtube.YoutubeSearchFilter
@@ -310,6 +313,18 @@ fun YoutubeScreen(
                                         fontFamily = GoogleSansRounded,
                                     )
                                 },
+                                trailingIcon = if (uiState.query.isNotEmpty()) {
+                                    {
+                                        IconButton(onClick = { viewModel.onQueryChange("") }) {
+                                            Icon(
+                                                Icons.Rounded.Close,
+                                                contentDescription = stringResource(R.string.youtube_clear_search),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    null
+                                },
                             )
                         },
                         expanded = false,
@@ -454,7 +469,9 @@ fun YoutubeScreen(
                                     YoutubeSection.PLAYLISTS -> stringResource(R.string.youtube_playlists_empty)
                                     YoutubeSection.RADIO -> stringResource(R.string.youtube_radio_empty)
                                     YoutubeSection.SEARCH -> stringResource(R.string.youtube_search_empty)
-                                    YoutubeSection.HOME -> stringResource(R.string.youtube_home_empty)
+                                    YoutubeSection.HOME -> stringResource(
+                                        if (uiState.collectionTitle != null) R.string.youtube_playlist_empty else R.string.youtube_home_empty,
+                                    )
                                     YoutubeSection.SAVED -> stringResource(R.string.youtube_saved_empty)
                                 }
                             )
@@ -539,13 +556,25 @@ private fun YoutubeCompactHeader(
     onAccount: () -> Unit,
     onSettings: () -> Unit,
 ) {
-    val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+    val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+    val headerShape = AbsoluteSmoothCornerShape(
+        cornerRadiusTL = 0.dp,
+        smoothnessAsPercentTL = 60,
+        cornerRadiusTR = 0.dp,
+        smoothnessAsPercentTR = 60,
+        cornerRadiusBL = 36.dp,
+        smoothnessAsPercentBL = 70,
+        cornerRadiusBR = 36.dp,
+        smoothnessAsPercentBR = 70,
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(headerShape)
             .background(headerColor)
             .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp)
+            .padding(top = 6.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FilledTonalButton(
