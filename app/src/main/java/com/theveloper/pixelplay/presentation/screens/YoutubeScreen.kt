@@ -75,6 +75,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
@@ -134,6 +136,8 @@ fun YoutubeScreen(
     var showBeta by remember { mutableStateOf(false) }
     val stablePlayer by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     val configuration = LocalConfiguration.current
     val isWideScreen = configuration.screenWidthDp >= WIDE_SCREEN_DP
     val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -171,6 +175,14 @@ fun YoutubeScreen(
 
     LaunchedEffect(section) {
         viewModel.openSection(section)
+    }
+    LaunchedEffect(section, playerViewModel) {
+        if (section == YoutubeSection.SEARCH) {
+            playerViewModel.searchNavDoubleTapEvents.collect {
+                searchFocusRequester.requestFocus()
+                keyboardController?.show()
+            }
+        }
     }
     LaunchedEffect(stablePlayer.currentSong?.id) {
         stablePlayer.currentSong?.let(viewModel::rememberPlayed)
@@ -243,6 +255,7 @@ fun YoutubeScreen(
                 query = uiState.query,
                 onQueryChange = viewModel::onQueryChange,
                 showSearch = browseSection == YoutubeSection.SEARCH && uiState.collectionTitle == null,
+                searchFocusRequester = searchFocusRequester,
                 searchFilter = uiState.filter,
                 onFilter = viewModel::setFilter,
                 onBack = if (uiState.collectionTitle != null) viewModel::closeCollection else null,
@@ -510,6 +523,7 @@ private fun YoutubeCompactHeader(
     query: String,
     onQueryChange: (String) -> Unit,
     showSearch: Boolean,
+    searchFocusRequester: FocusRequester,
     searchFilter: YoutubeSearchFilter,
     onFilter: (YoutubeSearchFilter) -> Unit,
     onBack: (() -> Unit)?,
@@ -587,6 +601,7 @@ private fun YoutubeCompactHeader(
             YoutubeSearchField(
                 query = query,
                 onQueryChange = onQueryChange,
+                focusRequester = searchFocusRequester,
                 searchFilter = searchFilter,
                 onFilter = onFilter,
             )
@@ -598,6 +613,7 @@ private fun YoutubeCompactHeader(
 private fun YoutubeSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
+    focusRequester: FocusRequester,
     searchFilter: YoutubeSearchFilter,
     onFilter: (YoutubeSearchFilter) -> Unit,
 ) {
@@ -613,6 +629,9 @@ private fun YoutubeSearchField(
     DockedSearchBar(
         inputField = {
             SearchBarDefaults.InputField(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
                 query = query,
                 onQueryChange = onQueryChange,
                 onSearch = { keyboard?.hide() },
