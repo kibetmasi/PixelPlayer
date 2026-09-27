@@ -44,7 +44,7 @@
     <string name="youtube_saved_empty">Saved songs show up here.</string>
     <string name="youtube_search_empty">Search YouTube Music.</string>
     <string name="youtube_home_empty">The feed is unavailable right now.</string>
-    <string name="youtube_playlist_empty">This playlist didn\'t return any tracks.</string>
+    <string name="youtube_playlist_empty">This playlist did not return any tracks.</string>
     <string name="youtube_radio_empty">Radio stations are unavailable right now.</string>
     <string name="youtube_playlists_empty">Playlists are unavailable right now.</string>
     <string name="youtube_radio_from">Radio from %1$s</string>
