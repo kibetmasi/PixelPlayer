@@ -38,6 +38,7 @@ class YoutubeViewModel @Inject constructor(
     val uiState: StateFlow<YoutubeUiState> = _uiState.asStateFlow()
     val likedTracks: StateFlow<List<YoutubeHit>> = musicStore.liked
     val savedTracks: StateFlow<List<YoutubeHit>> = musicStore.saved
+    val recentTracks: StateFlow<List<YoutubeHit>> = musicStore.recent
     val likedSongIds: StateFlow<Set<String>> = musicStore.likedSongIds
     val savedSongIds: StateFlow<Set<String>> = musicStore.savedSongIds
     val account: StateFlow<YoutubeAccount> = session.account
@@ -191,6 +192,10 @@ class YoutubeViewModel @Inject constructor(
 
     fun toggleSave(hit: YoutubeHit) {
         musicStore.toggleSave(hit)
+    }
+
+    fun rememberPlayed(song: Song) {
+        musicStore.rememberRecent(song)
     }
 
     fun importSession(cookieHeader: String): Boolean {

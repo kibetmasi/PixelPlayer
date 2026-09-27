@@ -125,6 +125,7 @@ fun YoutubeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val liked by viewModel.likedTracks.collectAsStateWithLifecycle()
     val saved by viewModel.savedTracks.collectAsStateWithLifecycle()
+    val recent by viewModel.recentTracks.collectAsStateWithLifecycle()
     val likedIds by viewModel.likedSongIds.collectAsStateWithLifecycle()
     val savedIds by viewModel.savedSongIds.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
@@ -170,6 +171,9 @@ fun YoutubeScreen(
 
     LaunchedEffect(section) {
         viewModel.openSection(section)
+    }
+    LaunchedEffect(stablePlayer.currentSong?.id) {
+        stablePlayer.currentSong?.let(viewModel::rememberPlayed)
     }
 
     if (uiState.collectionTitle != null) {
@@ -309,7 +313,7 @@ fun YoutubeScreen(
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 LoadingIndicator()
                             }
-                        } else if (uiState.shelves.isEmpty()) {
+                        } else if (uiState.shelves.isEmpty() && recent.isEmpty()) {
                             EmptyYoutubeState(message = stringResource(R.string.youtube_home_empty))
                         } else {
                             val mixHits = uiState.shelves
@@ -324,6 +328,29 @@ fun YoutubeScreen(
                                 mixHits.take(8).map { placeholderSong(it) }.toImmutableList()
                             }
                             LazyColumn(contentPadding = contentPadding) {
+                                if (recent.isNotEmpty()) {
+                                    item(key = "recent") {
+                                        Text(
+                                            text = stringResource(R.string.youtube_recent_title),
+                                            modifier = Modifier.padding(bottom = 8.dp, top = 4.dp),
+                                            style = MaterialTheme.typography.titleLarge,
+                                            fontFamily = GoogleSansRounded,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            items(recent, key = { "recent-${it.url}" }) { hit ->
+                                                YoutubeTile(
+                                                    hit = hit,
+                                                    modifier = Modifier.width(168.dp),
+                                                    isCurrent = currentSongId == YoutubeClient.songIdForUrl(hit.url),
+                                                    isPlaying = isPlaying,
+                                                    onClick = { playHit(hit, false) },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (mixHits.isNotEmpty()) {
                                 item(key = "your_mix") {
                                     YourMixHeader(
                                         song = stringResource(R.string.youtube_todays_mix),
@@ -346,6 +373,7 @@ fun YoutubeScreen(
                                             },
                                         )
                                     }
+                                }
                                 }
                                 items(uiState.shelves, key = { it.id }) { shelf ->
                                     Text(

@@ -21,11 +21,13 @@ class YoutubeMusicStore @Inject constructor(
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val _liked = MutableStateFlow(read(KEY_LIKED))
     private val _saved = MutableStateFlow(read(KEY_SAVED))
+    private val _recent = MutableStateFlow(read(KEY_RECENT))
     private val _likedSongIds = MutableStateFlow(idsOf(_liked.value))
     private val _savedSongIds = MutableStateFlow(idsOf(_saved.value))
 
     val liked: StateFlow<List<YoutubeHit>> = _liked.asStateFlow()
     val saved: StateFlow<List<YoutubeHit>> = _saved.asStateFlow()
+    val recent: StateFlow<List<YoutubeHit>> = _recent.asStateFlow()
     val likedSongIds: StateFlow<Set<String>> = _likedSongIds.asStateFlow()
     val savedSongIds: StateFlow<Set<String>> = _savedSongIds.asStateFlow()
 
@@ -47,6 +49,17 @@ class YoutubeMusicStore @Inject constructor(
 
     fun toggleSave(song: Song) {
         hitFromSong(song)?.let(::toggleSave)
+    }
+
+    fun rememberRecent(hit: YoutubeHit) {
+        if (hit.url.isBlank() || hit.kind != YoutubeHit.Kind.TRACK) return
+        val next = listOf(hit) + _recent.value.filterNot { it.url == hit.url }
+        _recent.value = next.take(MAX_RECENT)
+        persist(KEY_RECENT, _recent.value)
+    }
+
+    fun rememberRecent(song: Song) {
+        hitFromSong(song)?.let(::rememberRecent)
     }
 
     private fun idsOf(hits: List<YoutubeHit>): Set<String> =
@@ -119,6 +132,8 @@ class YoutubeMusicStore @Inject constructor(
         private const val PREFS = "youtube_music"
         private const val KEY_LIKED = "liked"
         private const val KEY_SAVED = "saved"
+        private const val KEY_RECENT = "recent"
         private const val MAX_TRACKS = 200
+        private const val MAX_RECENT = 24
     }
 }

@@ -55,7 +55,13 @@ internal class YoutubeDownloader : Downloader() {
         }
     }
 
-    fun postJson(url: String, json: String, origin: String = "https://www.youtube.com"): String {
+    fun postJson(
+        url: String,
+        json: String,
+        origin: String = "https://www.youtube.com",
+        clientName: String? = null,
+        clientVersion: String? = null,
+    ): String {
         val cookies = cookieHeader?.trim().orEmpty()
         val request = okhttp3.Request.Builder()
             .url(url)
@@ -65,7 +71,10 @@ internal class YoutubeDownloader : Downloader() {
             .header("Origin", origin)
             .header("Referer", "$origin/")
             .header("X-Origin", origin)
+            .header("X-Goog-AuthUser", "0")
             .apply {
+                if (!clientName.isNullOrBlank()) header("X-YouTube-Client-Name", clientName)
+                if (!clientVersion.isNullOrBlank()) header("X-YouTube-Client-Version", clientVersion)
                 if (cookies.isNotEmpty()) {
                     header("Cookie", cookies)
                     authorization(cookies, origin)?.let { header("Authorization", it) }
@@ -94,13 +103,20 @@ internal class YoutubeDownloader : Downloader() {
                     val index = part.indexOf('=')
                     part.substring(0, index) to part.substring(index + 1)
                 }
-            val sapisid = values["SAPISID"].orEmpty().ifBlank { values["__Secure-3PAPISID"].orEmpty() }
-            if (sapisid.isBlank()) return null
             val timestamp = System.currentTimeMillis() / 1000
-            val digest = MessageDigest.getInstance("SHA-1")
-                .digest("$timestamp $sapisid $origin".toByteArray())
-            val hash = digest.joinToString("") { byte -> "%02x".format(byte) }
-            return "SAPISIDHASH ${timestamp}_$hash"
+            fun hash(secret: String): String? {
+                if (secret.isBlank()) return null
+                val digest = MessageDigest.getInstance("SHA-1")
+                    .digest("$timestamp $secret $origin".toByteArray())
+                return digest.joinToString("") { byte -> "%02x".format(byte) }
+            }
+            val parts = buildList {
+                hash(values["SAPISID"].orEmpty().ifBlank { values["__Secure-3PAPISID"].orEmpty() })
+                    ?.let { add("SAPISIDHASH ${timestamp}_$it") }
+                hash(values["__Secure-1PAPISID"].orEmpty())?.let { add("SAPISID1PHASH ${timestamp}_$it") }
+                hash(values["__Secure-3PAPISID"].orEmpty())?.let { add("SAPISID3PHASH ${timestamp}_$it") }
+            }
+            return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
         }
     }
 }

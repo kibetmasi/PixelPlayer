@@ -79,35 +79,73 @@ class YoutubeClient @Inject constructor(
             .toList()
     }
 
-    fun loadLikedVideos(limit: Int = 50): List<YoutubeHit> {
+    fun loadLikedVideos(limit: Int = 100): List<YoutubeHit> {
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        val requests = listOf(
-            Triple(
-                "VLLl",
-                "WEB",
-                "https://www.youtube.com",
-            ),
-            Triple(
-                "FEmusic_liked_videos",
-                "WEB_REMIX",
-                "https://music.youtube.com",
-            ),
+        browseLibrary(
+            host = "https://music.youtube.com",
+            browseId = "FEmusic_liked_videos",
+            clientName = "WEB_REMIX",
+            clientVersion = "1.20250922.01.00",
+            clientHeader = "67",
+            hits = hits,
+            limit = limit,
         )
-        requests.forEach { (browseId, clientName, origin) ->
-            if (hits.size >= limit) return hits.take(limit).toList()
-            val version = if (clientName == "WEB_REMIX") "1.20250922.01.00" else "2.20250301.01.00"
-            val body = """
-                {"context":{"client":{"clientName":"$clientName","clientVersion":"$version","hl":"en","gl":"US"}},"browseId":"$browseId"}
-            """.trim()
-            val json = runCatching {
-                downloader.postJson("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", body, origin)
-            }.getOrNull() ?: return@forEach
-            val root = runCatching { JSONObject(json) }.getOrNull() ?: return@forEach
-            collectVideoHits(root, hits, limit)
+        if (hits.isEmpty()) {
+            browseLibrary(
+                host = "https://music.youtube.com",
+                browseId = "VLLM",
+                clientName = "WEB_REMIX",
+                clientVersion = "1.20250922.01.00",
+                clientHeader = "67",
+                hits = hits,
+                limit = limit,
+            )
+        }
+        if (hits.isEmpty()) {
+            browseLibrary(
+                host = "https://www.youtube.com",
+                browseId = "VLLl",
+                clientName = "WEB",
+                clientVersion = "2.20250301.01.00",
+                clientHeader = "1",
+                hits = hits,
+                limit = limit,
+            )
         }
         return hits.take(limit).toList()
+    }
+
+    private fun browseLibrary(
+        host: String,
+        browseId: String,
+        clientName: String,
+        clientVersion: String,
+        clientHeader: String,
+        hits: MutableSet<YoutubeHit>,
+        limit: Int,
+    ) {
+        val context = """
+            {"client":{"clientName":"$clientName","clientVersion":"$clientVersion","hl":"en","gl":"US"}}
+        """.trim()
+        var body = """{"context":$context,"browseId":"$browseId"}"""
+        repeat(4) {
+            if (hits.size >= limit) return
+            val json = runCatching {
+                downloader.postJson(
+                    url = "$host/youtubei/v1/browse?prettyPrint=false",
+                    json = body,
+                    origin = host,
+                    clientName = clientHeader,
+                    clientVersion = clientVersion,
+                )
+            }.getOrNull() ?: return
+            val root = runCatching { JSONObject(json) }.getOrNull() ?: return
+            collectVideoHits(root, hits, limit)
+            val token = findContinuation(root) ?: return
+            body = """{"context":$context,"continuation":${JSONObject.quote(token)}}"""
+        }
     }
 
     fun loadSubscriptionFeed(limit: Int = 20): List<YoutubeHit> {
@@ -243,19 +281,21 @@ class YoutubeClient @Inject constructor(
                         ?.optJSONObject("watchEndpoint")
                         ?.optString("videoId")
                         .orEmpty()
+                }.ifBlank {
+                    if (node.has("flexColumns")) firstVideoId(node.optJSONObject("overlay")) else ""
                 }
                 if (videoId.length == 11) {
                     val title = videoTitle(node)
                     if (title.isNotBlank()) {
                         hits += YoutubeHit(
-                            url = "https://www.youtube.com/watch?v=$videoId",
+                            url = "https://music.youtube.com/watch?v=$videoId",
                             title = title,
                             artist = jsonText(node.optJSONObject("ownerText"))
                                 .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
                                 .ifBlank { flexColumnText(node, 1) }
                                 .ifBlank { "YouTube Music" },
                             durationSec = 0,
-                            thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hqdefault.jpg"),
+                            thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
                             kind = YoutubeHit.Kind.TRACK,
                         )
                     }
@@ -272,6 +312,47 @@ class YoutubeClient @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun firstVideoId(node: JSONObject?): String {
+        if (node == null) return ""
+        node.optString("videoId").takeIf { it.length == 11 }?.let { return it }
+        val keys = node.keys()
+        while (keys.hasNext()) {
+            when (val child = node.opt(keys.next())) {
+                is JSONObject -> firstVideoId(child).takeIf { it.length == 11 }?.let { return it }
+                is JSONArray -> {
+                    for (index in 0 until child.length()) {
+                        val item = child.opt(index)
+                        if (item is JSONObject) {
+                            firstVideoId(item).takeIf { it.length == 11 }?.let { return it }
+                        }
+                    }
+                }
+            }
+        }
+        return ""
+    }
+
+    private fun findContinuation(node: Any?): String? {
+        when (node) {
+            is JSONObject -> {
+                node.optJSONObject("continuationCommand")
+                    ?.optString("token")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { return it }
+                val keys = node.keys()
+                while (keys.hasNext()) {
+                    findContinuation(node.opt(keys.next()))?.let { return it }
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until node.length()) {
+                    findContinuation(node.opt(index))?.let { return it }
+                }
+            }
+        }
+        return null
     }
 
     private fun videoTitle(node: JSONObject): String {
