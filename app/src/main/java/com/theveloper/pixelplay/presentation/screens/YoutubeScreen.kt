@@ -229,6 +229,9 @@ fun YoutubeScreen(
     val playHit: (YoutubeHit, Boolean) -> Unit = { hit, asRadio ->
         if (hit.kind == YoutubeHit.Kind.COLLECTION && !asRadio) {
             viewModel.openCollection(hit)
+        } else if (currentSongId == YoutubeClient.songIdForUrl(hit.url)) {
+            // Same track that is already loaded: toggle pause instead of seeking to 0.
+            playerViewModel.playPause()
         } else if (!playGate.compareAndSet(false, true)) {
             Unit
         } else {
