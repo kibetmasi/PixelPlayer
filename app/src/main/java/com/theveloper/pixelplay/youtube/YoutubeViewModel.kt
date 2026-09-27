@@ -200,7 +200,7 @@ class YoutubeViewModel @Inject constructor(
 
     fun importSession(cookieHeader: String): Boolean {
         val normalized = cookieHeader.trim()
-        val signedIn = listOf("LOGIN_INFO", "SAPISID", "__Secure-1PSID", "__Secure-3PSID")
+        val signedIn = listOf("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID")
             .any { key -> normalized.contains("$key=", ignoreCase = true) }
         if (!signedIn) return false
         session.save(normalized)
@@ -308,27 +308,33 @@ class YoutubeViewModel @Inject constructor(
             }
             val built = runCatching {
                 withContext(Dispatchers.IO) {
-                    val trending = runCatching { client.loadTrendingMusic(18) }.getOrDefault(emptyList())
-                    val playlists = runCatching {
-                        client.search("top music", YoutubeSearchFilter.PLAYLISTS, 12)
-                    }.getOrDefault(emptyList())
-                    val followed = if (session.isSignedIn()) {
+                    val yours = if (session.isSignedIn()) {
+                        runCatching { client.loadLikedMusic(24) }.getOrDefault(emptyList())
+                    } else {
+                        emptyList()
+                    }.ifEmpty { musicStore.recent.value }
+                    val mix = yours.ifEmpty {
+                        if (session.isSignedIn()) emptyList()
+                        else runCatching { client.loadTrendingMusic(18) }.getOrDefault(emptyList())
+                    }
+                    val followed = if (session.isSignedIn() && yours.isEmpty()) {
                         runCatching { client.loadSubscriptionFeed(12) }.getOrDefault(emptyList())
                     } else {
                         emptyList()
                     }
                     listOfNotNull(
-                        followed.takeIf { it.isNotEmpty() }?.let {
-                            YoutubeShelf("followed", "From your feed", it)
+                        mix.takeIf { it.isNotEmpty() }?.let {
+                            YoutubeShelf(
+                                id = "yours",
+                                title = if (yours.isNotEmpty()) "For you" else "Trending songs",
+                                items = it,
+                            )
                         },
-                        trending.takeIf { it.isNotEmpty() }?.let {
-                            YoutubeShelf("trending", "Trending songs", it)
-                        },
-                        trending.take(10).takeIf { it.isNotEmpty() }?.let {
+                        mix.shuffled().take(12).takeIf { it.isNotEmpty() && yours.isNotEmpty() }?.let {
                             YoutubeShelf("radio", "Radio", it, startsRadio = true)
                         },
-                        playlists.takeIf { it.isNotEmpty() }?.let {
-                            YoutubeShelf("playlists", "Playlists", it)
+                        followed.takeIf { it.isNotEmpty() }?.let {
+                            YoutubeShelf("followed", "From your feed", it)
                         },
                     )
                 }
@@ -382,7 +388,18 @@ class YoutubeViewModel @Inject constructor(
             _uiState.update {
                 it.copy(isLoading = !refreshing && it.results.isEmpty(), isRefreshing = refreshing, error = null, shelves = emptyList())
             }
-            val loaded = runCatching { withContext(Dispatchers.IO) { client.loadTrendingMusic(16) } }
+            val loaded = runCatching {
+                withContext(Dispatchers.IO) {
+                    val yours = if (session.isSignedIn()) {
+                        client.loadLikedMusic(16)
+                    } else {
+                        emptyList()
+                    }.ifEmpty { musicStore.recent.value }.shuffled()
+                    yours.ifEmpty {
+                        if (session.isSignedIn()) emptyList() else client.loadTrendingMusic(16)
+                    }
+                }
+            }
             loaded.fold(
                 onSuccess = { hits ->
                     client.radioHits = hits

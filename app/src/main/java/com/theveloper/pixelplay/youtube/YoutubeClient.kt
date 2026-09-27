@@ -84,13 +84,16 @@ class YoutubeClient @Inject constructor(
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        val failure = runCatching {
-            browseLiked("VLLM", hits, limit)
-        }.exceptionOrNull()
-        if (hits.isEmpty()) {
-            val reason = failure?.message?.take(180)
-            throw IllegalStateException(reason ?: "Couldn't load Liked Music.")
-        }
+        browseLiked("VLLM", hits, limit)
+        if (hits.isEmpty()) throw IllegalStateException("YouTube Music returned no liked songs.")
+        return hits.take(limit).toList()
+    }
+
+    fun loadLikedMusic(limit: Int = 24): List<YoutubeHit> {
+        applySession()
+        if (!session.isSignedIn()) return emptyList()
+        val hits = linkedSetOf<YoutubeHit>()
+        runCatching { browseLiked("VLLM", hits, limit) }
         return hits.take(limit).toList()
     }
 
@@ -101,7 +104,7 @@ class YoutubeClient @Inject constructor(
     ) {
         val visitor = musicVisitorId().ifBlank { INNER_TUNE_VISITOR }
         val context = """
-            {"client":{"clientName":"WEB_REMIX","clientVersion":"$INNER_TUNE_VERSION","gl":"US","hl":"en","visitorData":${JSONObject.quote(visitor)}}}
+            {"client":{"clientName":"WEB_REMIX","clientVersion":"$MUSIC_CLIENT_VERSION","gl":"US","hl":"en","visitorData":${JSONObject.quote(visitor)}}}
         """.trim()
         var continuation: String? = null
         repeat(6) {
@@ -122,8 +125,8 @@ class YoutubeClient @Inject constructor(
                 url = url,
                 json = body,
                 origin = "https://music.youtube.com",
-                clientName = "WEB_REMIX",
-                clientVersion = INNER_TUNE_VERSION,
+                clientName = MUSIC_CLIENT_ID,
+                clientVersion = MUSIC_CLIENT_VERSION,
                 userAgent = MUSIC_USER_AGENT,
                 visitorId = visitor,
             )
@@ -509,9 +512,10 @@ class YoutubeClient @Inject constructor(
         private val initialized = AtomicBoolean(false)
         private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
         private const val MUSIC_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MUSIC_API_KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
-        private const val INNER_TUNE_VERSION = "1.20220606.03.00"
+        private const val MUSIC_CLIENT_ID = "67"
+        private const val MUSIC_CLIENT_VERSION = "1.20260804.16.00"
         private const val INNER_TUNE_VISITOR = "CgtsZG1ySnZiQWtSbyiMjuGSBg=="
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {

@@ -121,7 +121,8 @@ private fun YoutubeWebLoginScreen(
                     onWebViewCreated = { webView = it },
                     onCookiesMaybeReady = { url ->
                         val cookies = extractYoutubeSession() ?: return@YoutubeWebView
-                        val hasAuth = cookies.contains("SAPISID=") || cookies.contains("__Secure-3PAPISID=")
+                        val hasAuth = listOf("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID")
+                            .any { key -> cookies.contains("$key=", ignoreCase = true) }
                         if (!hasAuth) return@YoutubeWebView
                         val onMusic = url.orEmpty().contains("music.youtube.com")
                         if (!onMusic) {
@@ -193,10 +194,9 @@ internal fun extractYoutubeSession(): String? {
             if (key.isNotEmpty() && value.isNotEmpty()) map[key] = value
         }
     val signedIn = map.keys.any { key ->
-        key.equals("LOGIN_INFO", ignoreCase = true) ||
-            key.equals("SAPISID", ignoreCase = true) ||
-            key.equals("__Secure-1PSID", ignoreCase = true) ||
-            key.equals("__Secure-3PSID", ignoreCase = true)
+        key.equals("SAPISID", ignoreCase = true) ||
+            key.equals("__Secure-1PAPISID", ignoreCase = true) ||
+            key.equals("__Secure-3PAPISID", ignoreCase = true)
     }
     if (!signedIn) return null
     return map.entries.joinToString("; ") { "${it.key}=${it.value}" }

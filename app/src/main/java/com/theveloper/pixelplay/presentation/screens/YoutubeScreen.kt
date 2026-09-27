@@ -317,7 +317,7 @@ fun YoutubeScreen(
                             EmptyYoutubeState(message = stringResource(R.string.youtube_home_empty))
                         } else {
                             val mixHits = uiState.shelves
-                                .firstOrNull { it.id == "trending" }
+                                .firstOrNull { it.id == "yours" }
                                 ?.items
                                 ?.filter { it.kind == YoutubeHit.Kind.TRACK }
                                 .orEmpty()

@@ -17,7 +17,9 @@ data class YoutubeAccount(
     val cookieHeader: String = "",
     val displayName: String = "",
 ) {
-    val isSignedIn: Boolean get() = cookieHeader.isNotBlank()
+    val isSignedIn: Boolean
+        get() = listOf("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID")
+            .any { key -> cookieHeader.contains("$key=", ignoreCase = true) }
 }
 
 @Singleton
