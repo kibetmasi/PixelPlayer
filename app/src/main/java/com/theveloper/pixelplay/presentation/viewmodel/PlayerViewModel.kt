@@ -2227,7 +2227,7 @@ class PlayerViewModel @Inject constructor(
 
     fun showPreparingSong(song: Song) {
         _isSheetVisible.value = true
-        _sheetState.value = PlayerSheetState.EXPANDED
+        _sheetState.value = PlayerSheetState.COLLAPSED
         playbackStateHolder.updateStablePlayerState {
             it.copy(
                 currentSong = song,
