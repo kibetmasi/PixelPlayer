@@ -32,6 +32,7 @@ class YoutubeClient @Inject constructor(
     @Volatile var playlistHits: List<YoutubeHit> = emptyList()
     @Volatile var radioHits: List<YoutubeHit> = emptyList()
     @Volatile var likedHits: List<YoutubeHit> = emptyList()
+    @Volatile private var visitorId: String? = null
 
     private data class CachedResolve(
         val track: YoutubeResolvedTrack,
@@ -83,77 +84,69 @@ class YoutubeClient @Inject constructor(
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        runCatching {
-            queueLibrary(
-                endpoint = "next",
-                bodySeed = """"playlistId":"LM","isAudioOnly":true""",
-                hits = hits,
-                limit = limit,
-            )
+        val failures = mutableListOf<String>()
+        listOf("VLLM", "FEmusic_liked_videos").forEach { browseId ->
+            if (hits.isNotEmpty()) return@forEach
+            runCatching {
+                browseLiked(browseId, hits, limit)
+            }.onFailure { error ->
+                failures += error.message ?: error.javaClass.simpleName
+            }
         }
         if (hits.isEmpty()) {
-            browseLibrary(
-                browseId = "FEmusic_liked_videos",
-                hits = hits,
-                limit = limit,
-            )
-        }
-        if (hits.isEmpty()) {
-            browseLibrary(
-                browseId = "VLLM",
-                hits = hits,
-                limit = limit,
-            )
-        }
-        if (hits.isEmpty()) {
-            throw IllegalStateException("Couldn't load Liked Music. Sign in again from Account.")
+            val reason = failures.firstOrNull()?.take(180)
+            throw IllegalStateException(reason ?: "Couldn't load Liked Music.")
         }
         return hits.take(limit).toList()
     }
 
-    private fun browseLibrary(
+    private fun browseLiked(
         browseId: String,
         hits: MutableSet<YoutubeHit>,
         limit: Int,
     ) {
-        runCatching {
-            queueLibrary(
-                endpoint = "browse",
-                bodySeed = """"browseId":"$browseId"""",
-                hits = hits,
-                limit = limit,
-            )
-        }
-    }
-
-    private fun queueLibrary(
-        endpoint: String,
-        bodySeed: String,
-        hits: MutableSet<YoutubeHit>,
-        limit: Int,
-    ) {
-        val version = "1.20250922.01.00"
+        val version = musicClientVersion()
+        val visitor = musicVisitorId()
         val context = """
-            {"client":{"clientName":"WEB_REMIX","clientVersion":"$version","hl":"en","gl":"US","platform":"DESKTOP","originalUrl":"https://music.youtube.com/playlist?list=LM"}}
+            {"client":{"clientName":"WEB_REMIX","clientVersion":"$version","hl":"en","gl":"US"},"user":{}}
         """.trim()
-        var body = """{"context":$context,$bodySeed}"""
+        var body = """{"context":$context,"browseId":"$browseId"}"""
         repeat(6) {
             if (hits.size >= limit) return
             val json = downloader.postJson(
-                url = "https://music.youtube.com/youtubei/v1/$endpoint?prettyPrint=false",
+                url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false&alt=json&key=$MUSIC_API_KEY",
                 json = body,
                 origin = "https://music.youtube.com",
                 clientName = "67",
                 clientVersion = version,
                 userAgent = MUSIC_USER_AGENT,
+                visitorId = visitor,
             )
             val root = JSONObject(json)
-            val before = hits.size
             collectVideoHits(root, hits, limit)
-            if (hits.size == before && !json.contains("\"videoId\"")) return
             val token = findPlaylistContinuation(root) ?: return
             body = """{"context":$context,"continuation":${JSONObject.quote(token)}}"""
         }
+    }
+
+    private fun musicClientVersion(): String {
+        val format = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+        format.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return "1.${format.format(java.util.Date())}.01.00"
+    }
+
+    private fun musicVisitorId(): String {
+        visitorId?.takeIf { it.isNotBlank() }?.let { return it }
+        val html = runCatching {
+            downloader.getText("https://music.youtube.com", MUSIC_USER_AGENT)
+        }.getOrNull().orEmpty()
+        val found = Regex(""""VISITOR_DATA"\s*:\s*"([^"]+)"""")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            .orEmpty()
+        if (found.isNotBlank()) visitorId = found
+        return found
     }
 
     fun loadSubscriptionFeed(limit: Int = 20): List<YoutubeHit> {
@@ -292,22 +285,20 @@ class YoutubeClient @Inject constructor(
                 }.ifBlank {
                     if (node.has("flexColumns")) firstVideoId(node.optJSONObject("overlay")) else ""
                 }
-                if (videoId.length == 11) {
-                    val title = videoTitle(node)
-                    if (title.isNotBlank()) {
-                        hits += YoutubeHit(
-                            url = "https://music.youtube.com/watch?v=$videoId",
-                            title = title,
-                            artist = jsonText(node.optJSONObject("longBylineText"))
-                                .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
-                                .ifBlank { jsonText(node.optJSONObject("ownerText")) }
-                                .ifBlank { flexColumnText(node, 1) }
-                                .ifBlank { "YouTube Music" },
-                            durationSec = 0,
-                            thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
-                            kind = YoutubeHit.Kind.TRACK,
-                        )
-                    }
+                if (videoId.length == 11 && looksLikeTrack(node)) {
+                    val title = videoTitle(node).ifBlank { "YouTube Music" }
+                    hits += YoutubeHit(
+                        url = "https://music.youtube.com/watch?v=$videoId",
+                        title = title,
+                        artist = jsonText(node.optJSONObject("longBylineText"))
+                            .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
+                            .ifBlank { jsonText(node.optJSONObject("ownerText")) }
+                            .ifBlank { flexColumnText(node, 1) }
+                            .ifBlank { "YouTube Music" },
+                        durationSec = 0,
+                        thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
+                        kind = YoutubeHit.Kind.TRACK,
+                    )
                 }
                 val keys = node.keys()
                 while (keys.hasNext() && hits.size < limit) {
@@ -321,6 +312,15 @@ class YoutubeClient @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun looksLikeTrack(node: JSONObject): Boolean {
+        return node.has("playlistItemData") ||
+            node.has("flexColumns") ||
+            node.has("longBylineText") ||
+            node.has("shortBylineText") ||
+            node.has("lengthText") ||
+            node.optJSONObject("title") != null
     }
 
     private fun firstVideoId(node: JSONObject?): String {
@@ -472,7 +472,8 @@ class YoutubeClient @Inject constructor(
         private val initialized = AtomicBoolean(false)
         private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
         private const val MUSIC_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0"
+        private const val MUSIC_API_KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {
             val id = songId.trim()

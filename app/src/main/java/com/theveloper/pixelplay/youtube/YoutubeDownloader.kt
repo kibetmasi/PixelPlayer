@@ -62,6 +62,7 @@ internal class YoutubeDownloader : Downloader() {
         clientName: String? = null,
         clientVersion: String? = null,
         userAgent: String = USER_AGENT,
+        visitorId: String? = null,
     ): String {
         val cookies = cookieHeader?.trim().orEmpty()
         val request = okhttp3.Request.Builder()
@@ -76,19 +77,33 @@ internal class YoutubeDownloader : Downloader() {
             .apply {
                 if (!clientName.isNullOrBlank()) header("X-YouTube-Client-Name", clientName)
                 if (!clientVersion.isNullOrBlank()) header("X-YouTube-Client-Version", clientVersion)
+                visitorId?.takeIf { it.isNotBlank() }?.let { header("X-Goog-Visitor-Id", it) }
                 if (cookies.isNotEmpty()) {
                     header("X-YouTube-Bootstrap-Logged-In", "true")
-                    header("Cookie", cookies)
-                    authorization(cookies, origin)?.let { header("Authorization", it) }
+                    val cookieHeader = if (cookies.contains("SOCS=")) cookies else "$cookies; SOCS=CAI"
+                    header("Cookie", cookieHeader)
+                    authorization(cookieHeader, origin)?.let { header("Authorization", it) }
                 }
             }
             .build()
         client.newCall(request).execute().use { response ->
             val responseBody = response.body.string()
             if (!response.isSuccessful) {
-                throw java.io.IOException("YouTube browse failed (${response.code})")
+                val hint = responseBody.replace(Regex("\\s+"), " ").take(160)
+                throw java.io.IOException("YouTube Music returned ${response.code}. $hint")
             }
             return responseBody
+        }
+    }
+
+    fun getText(url: String, userAgent: String): String {
+        val request = okhttp3.Request.Builder()
+            .url(url)
+            .header("User-Agent", userAgent)
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .build()
+        client.newCall(request).execute().use { response ->
+            return response.body.string()
         }
     }
 
@@ -105,20 +120,15 @@ internal class YoutubeDownloader : Downloader() {
                     val index = part.indexOf('=')
                     part.substring(0, index) to part.substring(index + 1)
                 }
+            val secret = values["__Secure-3PAPISID"].orEmpty()
+                .ifBlank { values["SAPISID"].orEmpty() }
+                .ifBlank { values["__Secure-1PAPISID"].orEmpty() }
+            if (secret.isBlank()) return null
             val timestamp = System.currentTimeMillis() / 1000
-            fun hash(secret: String): String? {
-                if (secret.isBlank()) return null
-                val digest = MessageDigest.getInstance("SHA-1")
-                    .digest("$timestamp $secret $origin".toByteArray())
-                return digest.joinToString("") { byte -> "%02x".format(byte) }
-            }
-            val parts = buildList {
-                hash(values["SAPISID"].orEmpty().ifBlank { values["__Secure-3PAPISID"].orEmpty() })
-                    ?.let { add("SAPISIDHASH ${timestamp}_$it") }
-                hash(values["__Secure-1PAPISID"].orEmpty())?.let { add("SAPISID1PHASH ${timestamp}_$it") }
-                hash(values["__Secure-3PAPISID"].orEmpty())?.let { add("SAPISID3PHASH ${timestamp}_$it") }
-            }
-            return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
+            val digest = MessageDigest.getInstance("SHA-1")
+                .digest("$timestamp $secret $origin".toByteArray(Charsets.UTF_8))
+            val hash = digest.joinToString("") { byte -> "%02x".format(byte) }
+            return "SAPISIDHASH ${timestamp}_$hash"
         }
     }
 }
