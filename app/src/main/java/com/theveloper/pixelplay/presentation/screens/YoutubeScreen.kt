@@ -110,6 +110,7 @@ import com.theveloper.pixelplay.youtube.YoutubeSection
 import com.theveloper.pixelplay.youtube.YoutubeViewModel
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val WIDE_SCREEN_DP = 600
 
@@ -175,11 +176,15 @@ fun YoutubeScreen(
         BackHandler { viewModel.closeCollection() }
     }
 
+    val playGate = remember { AtomicBoolean(false) }
     val playHit: (YoutubeHit, Boolean) -> Unit = { hit, asRadio ->
         if (hit.kind == YoutubeHit.Kind.COLLECTION && !asRadio) {
             viewModel.openCollection(hit)
+        } else if (!playGate.compareAndSet(false, true)) {
+            Unit
         } else if (asRadio) {
             scope.launch {
+                try {
                 runCatching { viewModel.radioTracks(hit) }
                     .onSuccess { queue ->
                         val playable = queue.ifEmpty { listOf(hit) }
@@ -196,9 +201,13 @@ fun YoutubeScreen(
                     .onFailure { error ->
                         viewModel.reportError(error.message ?: "Couldn't start radio")
                     }
+                } finally {
+                    playGate.set(false)
+                }
             }
         } else {
             scope.launch {
+                try {
                 runCatching { viewModel.resolvePlayable(hit) }
                     .onSuccess { song ->
                         playerViewModel.playSongs(
@@ -213,6 +222,9 @@ fun YoutubeScreen(
                     .onFailure { error ->
                         viewModel.reportError(error.message ?: "Couldn't play this track")
                     }
+                } finally {
+                    playGate.set(false)
+                }
             }
         }
     }
@@ -557,24 +569,23 @@ private fun YoutubeCompactHeader(
     onSettings: () -> Unit,
 ) {
     val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-    val headerShape = AbsoluteSmoothCornerShape(
-        cornerRadiusTL = 0.dp,
-        smoothnessAsPercentTL = 60,
-        cornerRadiusTR = 0.dp,
-        smoothnessAsPercentTR = 60,
-        cornerRadiusBL = 36.dp,
-        smoothnessAsPercentBL = 70,
-        cornerRadiusBR = 36.dp,
-        smoothnessAsPercentBR = 70,
+    val sheetCurve = AbsoluteSmoothCornerShape(
+        cornerRadiusTL = 32.dp,
+        smoothnessAsPercentTL = 70,
+        cornerRadiusTR = 32.dp,
+        smoothnessAsPercentTR = 70,
+        cornerRadiusBL = 0.dp,
+        smoothnessAsPercentBL = 60,
+        cornerRadiusBR = 0.dp,
+        smoothnessAsPercentBR = 60,
     )
+    Column(Modifier.fillMaxWidth().background(headerColor)) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(headerShape)
-            .background(headerColor)
             .statusBarsPadding()
             .padding(horizontal = 12.dp)
-            .padding(top = 6.dp, bottom = 14.dp),
+            .padding(top = 6.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FilledTonalButton(
@@ -607,6 +618,14 @@ private fun YoutubeCompactHeader(
                 contentDescription = stringResource(R.string.common_settings),
             )
         }
+    }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(28.dp)
+                .clip(sheetCurve)
+                .background(MaterialTheme.colorScheme.surface),
+        )
     }
 }
 

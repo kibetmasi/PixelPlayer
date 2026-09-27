@@ -50,7 +50,7 @@
     <string name="youtube_radio_from">Radio from %1$s</string>
     <string name="youtube_todays_mix">Today\'s Mix for you</string>
     <string name="youtube_account_title">Account</string>
-    <string name="youtube_account_body">Google blocks sign-in inside the app. Open YouTube in Chrome, then paste the cookie from that signed-in browser.</string>
+    <string name="youtube_account_body">Sign in with the Google account you use on YouTube. Liked videos and your feed then load from that account.</string>
     <string name="youtube_sign_in_google">Sign in with Google</string>
     <string name="youtube_signin_browser_body">1. Tap Open YouTube in Chrome and sign in there.\n2. On a computer, open youtube.com, press F12, open Network, click any youtube.com request, and copy the full Cookie request header.\n3. Paste it below and save. Liked videos then load from that account.</string>
     <string name="youtube_open_chrome">Open YouTube in Chrome</string>
