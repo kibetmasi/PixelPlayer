@@ -26,6 +26,8 @@ data class YoutubeUiState(
     val collectionTitle: String? = null,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
+    val isLoadingMore: Boolean = false,
+    val hasMore: Boolean = false,
     val error: String? = null,
 )
 
@@ -46,6 +48,10 @@ class YoutubeViewModel @Inject constructor(
     private var searchJob: Job? = null
     private var likedJob: Job? = null
     private var warmUpJob: Job? = null
+    private var likedMoreJob: Job? = null
+    private var likedContinuation: String? = null
+    @Volatile
+    private var loadingMoreLiked = false
 
     init {
         viewModelScope.launch {
@@ -69,7 +75,13 @@ class YoutubeViewModel @Inject constructor(
             if (hasContent) return
         }
         _uiState.update {
-            it.copy(section = section, collectionTitle = null, error = null)
+            it.copy(
+                section = section,
+                collectionTitle = null,
+                error = null,
+                isLoadingMore = false,
+                hasMore = false,
+            )
         }
         when (section) {
             YoutubeSection.HOME -> {
@@ -228,6 +240,9 @@ class YoutubeViewModel @Inject constructor(
 
     private fun clearCaches() {
         warmUpJob?.cancel()
+        likedMoreJob?.cancel()
+        likedContinuation = null
+        loadingMoreLiked = false
         client.resetIdentity()
         client.likedHits = emptyList()
         client.feedShelves = emptyList()
@@ -251,36 +266,48 @@ class YoutubeViewModel @Inject constructor(
 
     private fun loadLiked(refreshing: Boolean = false) {
         likedJob?.cancel()
+        likedMoreJob?.cancel()
+        likedContinuation = null
+        loadingMoreLiked = false
         val epoch = session.generation()
         likedJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isLoading = !refreshing && it.results.isEmpty(),
                     isRefreshing = refreshing,
+                    isLoadingMore = false,
+                    hasMore = false,
                     error = null,
                 )
             }
             val local = musicStore.liked.value
             val remote = if (session.isSignedIn() && session.generation() == epoch) {
                 try {
-                    Result.success(withContext(Dispatchers.IO) { client.loadLikedVideos() })
+                    Result.success(withContext(Dispatchers.IO) { client.loadLikedPage() })
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     Result.failure(error)
                 }
             } else {
-                Result.success(emptyList())
+                Result.success(YoutubePage(emptyList(), null))
             }
             if (session.generation() != epoch) return@launch
             remote.fold(
-                onSuccess = { accountLikes ->
+                onSuccess = { page ->
                     if (session.generation() != epoch) return@launch
-                    val account = if (session.isSignedIn()) accountLikes else emptyList()
+                    val account = if (session.isSignedIn()) page.hits else emptyList()
                     val merged = (account + local).distinctBy { it.url }
                     client.likedHits = account
+                    likedContinuation = page.continuation
                     _uiState.update {
-                        it.copy(isLoading = false, isRefreshing = false, error = null, results = merged)
+                        it.copy(
+                            isLoading = false,
+                            isRefreshing = false,
+                            error = null,
+                            results = merged,
+                            hasMore = page.continuation != null,
+                        )
                     }
                 },
                 onFailure = { error ->
@@ -295,9 +322,50 @@ class YoutubeViewModel @Inject constructor(
                             isLoading = false,
                             isRefreshing = false,
                             results = local,
-                            error = error.message ?: "Couldn't load liked videos",
+                            error = error.message ?: "Couldn't load liked music",
                         )
                     }
+                },
+            )
+        }
+    }
+
+    /** Appends the next page of Liked Music; safe to call repeatedly while scrolling. */
+    fun loadMoreLiked() {
+        val state = _uiState.value
+        if (state.section != YoutubeSection.LIKED || state.collectionTitle != null) return
+        val token = likedContinuation ?: return
+        // Set synchronously: several rows near the end ask for the next page at once.
+        if (loadingMoreLiked) return
+        loadingMoreLiked = true
+        val epoch = session.generation()
+        likedMoreJob = viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingMore = true) }
+            val page = try {
+                Result.success(withContext(Dispatchers.IO) { client.loadLikedPage(token) })
+            } catch (cancelled: CancellationException) {
+                loadingMoreLiked = false
+                throw cancelled
+            } catch (error: Exception) {
+                Result.failure(error)
+            }
+            loadingMoreLiked = false
+            if (session.generation() != epoch) return@launch
+            page.fold(
+                onSuccess = { loaded ->
+                    likedContinuation = loaded.continuation
+                    client.likedHits = (client.likedHits + loaded.hits).distinctBy { it.url }
+                    _uiState.update {
+                        it.copy(
+                            isLoadingMore = false,
+                            hasMore = loaded.continuation != null,
+                            results = (it.results + loaded.hits).distinctBy { hit -> hit.url },
+                        )
+                    }
+                },
+                onFailure = {
+                    // Keep what is already on screen; the next scroll can retry.
+                    _uiState.update { it.copy(isLoadingMore = false) }
                 },
             )
         }

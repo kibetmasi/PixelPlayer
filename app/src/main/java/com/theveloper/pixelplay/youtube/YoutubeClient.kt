@@ -82,26 +82,41 @@ class YoutubeClient @Inject constructor(
             .toList()
     }
 
-    fun loadLikedVideos(limit: Int = 100): List<YoutubeHit> {
+    /**
+     * One page of Liked Music, newest like first (YouTube Music's own order).
+     * Pass [YoutubePage.continuation] back in to get the next page.
+     */
+    fun loadLikedPage(continuation: String? = null, pageSize: Int = LIKED_PAGE_SIZE): YoutubePage {
         applySession()
-        if (!session.isSignedIn()) return emptyList()
+        if (!session.isSignedIn()) return YoutubePage(emptyList(), null)
         val hits = linkedSetOf<YoutubeHit>()
-        val loggedIn = browseLiked("VLLM", hits, limit)
-        if (hits.isEmpty()) {
+        var token = continuation
+        var loggedIn: Boolean? = null
+        var requests = 0
+        do {
+            val root = musicBrowse(
+                browseId = if (token.isNullOrBlank()) LIKED_MUSIC_BROWSE_ID else null,
+                continuation = token,
+            )
+            if (loggedIn == null) loggedIn = loggedInFlag(root)
+            collectLikedShelf(root, hits, Int.MAX_VALUE)
+            token = findPlaylistContinuation(root)
+            requests++
+        } while (!token.isNullOrBlank() && hits.size < pageSize && requests < MAX_REQUESTS_PER_PAGE)
+        if (hits.isEmpty() && continuation.isNullOrBlank()) {
             throw IllegalStateException(
                 if (loggedIn == false) "YouTube Music did not accept this session. Sign in again from Account."
                 else "YouTube Music returned no liked songs.",
             )
         }
-        return hits.take(limit).toList()
+        return YoutubePage(hits.toList(), token?.takeIf { it.isNotBlank() })
     }
 
     fun loadLikedMusic(limit: Int = 24): List<YoutubeHit> {
-        applySession()
         if (!session.isSignedIn()) return emptyList()
-        val hits = linkedSetOf<YoutubeHit>()
-        runCatching { browseLiked("VLLM", hits, limit) }
-        return hits.take(limit).toList()
+        return runCatching { loadLikedPage(pageSize = limit).hits }
+            .getOrDefault(emptyList())
+            .take(limit)
     }
 
     /**
@@ -226,24 +241,6 @@ class YoutubeClient @Inject constructor(
     private fun configValue(html: String, key: String): String {
         val raw = Regex(""""$key"\s*:\s*"([^"]*)"""").find(html)?.groupValues?.getOrNull(1).orEmpty()
         return raw.replace("\\/", "/").replace("\\u003d", "=").replace("\\u0026", "&")
-    }
-
-    /** Returns null when the response did not say whether the session is logged in. */
-    private fun browseLiked(
-        browseId: String,
-        hits: MutableSet<YoutubeHit>,
-        limit: Int,
-    ): Boolean? {
-        var loggedIn: Boolean? = null
-        var continuation: String? = null
-        repeat(6) {
-            if (hits.size >= limit) return loggedIn
-            val root = musicBrowse(browseId = browseId, continuation = continuation)
-            if (loggedIn == null) loggedIn = loggedInFlag(root)
-            collectLikedShelf(root, hits, limit)
-            continuation = findPlaylistContinuation(root) ?: return loggedIn
-        }
-        return loggedIn
     }
 
     private fun musicBrowse(
@@ -562,7 +559,7 @@ class YoutubeClient @Inject constructor(
 
     fun loadCollectionTracks(url: String, limit: Int = 80): List<YoutubeHit> {
         applySession()
-        if (url.contains("list=LM")) return loadLikedVideos(limit)
+        if (url.contains("list=LM")) return loadLikedPage(pageSize = limit).hits.take(limit)
         val info = PlaylistInfo.getInfo(youtube(), url.trim())
         return info.relatedItems
             .asSequence()
@@ -886,6 +883,11 @@ class YoutubeClient @Inject constructor(
         private const val MUSIC_CLIENT_ID = "67"
         private const val MUSIC_CLIENT_VERSION = "1.20260804.16.00"
         private const val INNER_TUNE_VISITOR = "CgtsZG1ySnZiQWtSbyiMjuGSBg=="
+        private const val LIKED_MUSIC_BROWSE_ID = "VLLM"
+        const val LIKED_PAGE_SIZE = 100
+        // A continuation can come back with only a handful of rows, so allow a few
+        // round trips per page instead of showing the user a nearly empty page.
+        private const val MAX_REQUESTS_PER_PAGE = 3
         private val VISITOR_REGEX = Regex("^Cg[ts]")
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {

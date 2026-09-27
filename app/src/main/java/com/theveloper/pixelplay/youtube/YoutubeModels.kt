@@ -33,6 +33,12 @@ data class YoutubeHit(
     enum class Kind { TRACK, COLLECTION }
 }
 
+/** A page of hits plus the token that fetches the next one, or null at the end. */
+data class YoutubePage(
+    val hits: List<YoutubeHit>,
+    val continuation: String?,
+)
+
 data class YoutubeResolvedTrack(
     val watchUrl: String,
     val title: String,

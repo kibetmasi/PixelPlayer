@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -116,6 +117,8 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val WIDE_SCREEN_DP = 600
+/** How close to the end of the list a row must be to pull the next page. */
+private const val LOAD_MORE_THRESHOLD = 12
 
 @Composable
 fun YoutubeScreen(
@@ -491,7 +494,10 @@ fun YoutubeScreen(
                                     )
                                 }
                             }
-                            items(rows, key = { it.url }) { hit ->
+                            itemsIndexed(rows, key = { _, hit -> hit.url }) { index, hit ->
+                                if (uiState.hasMore && index >= rows.size - LOAD_MORE_THRESHOLD) {
+                                    LaunchedEffect(rows.size) { viewModel.loadMoreLiked() }
+                                }
                                 val song = remember(hit) { placeholderSong(hit) }
                                 YoutubeTrackRow(
                                     song = song,
@@ -503,6 +509,18 @@ fun YoutubeScreen(
                                     onLike = { viewModel.toggleLike(hit) },
                                     onSave = { viewModel.toggleSave(hit) },
                                 )
+                            }
+                            if (uiState.isLoadingMore) {
+                                item(key = "loading_more") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        LoadingIndicator()
+                                    }
+                                }
                             }
                         }
                     }
