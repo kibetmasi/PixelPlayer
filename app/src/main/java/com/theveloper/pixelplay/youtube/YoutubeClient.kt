@@ -84,17 +84,11 @@ class YoutubeClient @Inject constructor(
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        val failures = mutableListOf<String>()
-        listOf("VLLM", "FEmusic_liked_videos").forEach { browseId ->
-            if (hits.isNotEmpty()) return@forEach
-            runCatching {
-                browseLiked(browseId, hits, limit)
-            }.onFailure { error ->
-                failures += error.message ?: error.javaClass.simpleName
-            }
-        }
+        val failure = runCatching {
+            browseLiked("VLLM", hits, limit)
+        }.exceptionOrNull()
         if (hits.isEmpty()) {
-            val reason = failures.firstOrNull()?.take(180)
+            val reason = failure?.message?.take(180)
             throw IllegalStateException(reason ?: "Couldn't load Liked Music.")
         }
         return hits.take(limit).toList()
@@ -105,34 +99,77 @@ class YoutubeClient @Inject constructor(
         hits: MutableSet<YoutubeHit>,
         limit: Int,
     ) {
-        val version = musicClientVersion()
-        val visitor = musicVisitorId()
+        val visitor = musicVisitorId().ifBlank { INNER_TUNE_VISITOR }
         val context = """
-            {"client":{"clientName":"WEB_REMIX","clientVersion":"$version","hl":"en","gl":"US"},"user":{}}
+            {"client":{"clientName":"WEB_REMIX","clientVersion":"$INNER_TUNE_VERSION","gl":"US","hl":"en","visitorData":${JSONObject.quote(visitor)}}}
         """.trim()
-        var body = """{"context":$context,"browseId":"$browseId"}"""
+        var continuation: String? = null
         repeat(6) {
             if (hits.size >= limit) return
+            val url = buildString {
+                append("https://music.youtube.com/youtubei/v1/browse?prettyPrint=false&key=$MUSIC_API_KEY")
+                if (!continuation.isNullOrBlank()) {
+                    val token = java.net.URLEncoder.encode(continuation, Charsets.UTF_8.name())
+                    append("&continuation=$token&ctoken=$token&type=next")
+                }
+            }
+            val body = if (continuation.isNullOrBlank()) {
+                """{"context":$context,"browseId":"$browseId"}"""
+            } else {
+                """{"context":$context,"continuation":${JSONObject.quote(continuation)}}"""
+            }
             val json = downloader.postJson(
-                url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false&alt=json&key=$MUSIC_API_KEY",
+                url = url,
                 json = body,
                 origin = "https://music.youtube.com",
-                clientName = "67",
-                clientVersion = version,
+                clientName = "WEB_REMIX",
+                clientVersion = INNER_TUNE_VERSION,
                 userAgent = MUSIC_USER_AGENT,
                 visitorId = visitor,
             )
             val root = JSONObject(json)
-            collectVideoHits(root, hits, limit)
-            val token = findPlaylistContinuation(root) ?: return
-            body = """{"context":$context,"continuation":${JSONObject.quote(token)}}"""
+            collectLikedShelf(root, hits, limit)
+            continuation = findPlaylistContinuation(root) ?: return
         }
     }
 
-    private fun musicClientVersion(): String {
-        val format = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-        format.timeZone = java.util.TimeZone.getTimeZone("UTC")
-        return "1.${format.format(java.util.Date())}.01.00"
+    private fun collectLikedShelf(root: JSONObject, hits: MutableSet<YoutubeHit>, limit: Int) {
+        val rows = root.optJSONObject("contents")
+            ?.optJSONObject("twoColumnBrowseResultsRenderer")
+            ?.optJSONObject("secondaryContents")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.let { contents ->
+                (0 until contents.length()).firstNotNullOfOrNull { index ->
+                    contents.optJSONObject(index)
+                        ?.optJSONObject("musicPlaylistShelfRenderer")
+                        ?.optJSONArray("contents")
+                }
+            }
+            ?: root.optJSONObject("continuationContents")
+                ?.optJSONObject("musicPlaylistShelfContinuation")
+                ?.optJSONArray("contents")
+        if (rows == null) {
+            collectVideoHits(root, hits, limit)
+            return
+        }
+        for (index in 0 until rows.length()) {
+            if (hits.size >= limit) return
+            val renderer = rows.optJSONObject(index)
+                ?.optJSONObject("musicResponsiveListItemRenderer")
+                ?: continue
+            val videoId = renderer.optJSONObject("playlistItemData")?.optString("videoId").orEmpty()
+            val title = flexColumnText(renderer, 0)
+            if (videoId.length != 11 || title.isBlank()) continue
+            hits += YoutubeHit(
+                url = "https://music.youtube.com/watch?v=$videoId",
+                title = title,
+                artist = flexColumnText(renderer, 1).ifBlank { "YouTube Music" },
+                durationSec = 0,
+                thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
+                kind = YoutubeHit.Kind.TRACK,
+            )
+        }
     }
 
     private fun musicVisitorId(): String {
@@ -472,8 +509,10 @@ class YoutubeClient @Inject constructor(
         private val initialized = AtomicBoolean(false)
         private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
         private const val MUSIC_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36"
         private const val MUSIC_API_KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
+        private const val INNER_TUNE_VERSION = "1.20220606.03.00"
+        private const val INNER_TUNE_VISITOR = "CgtsZG1ySnZiQWtSbyiMjuGSBg=="
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {
             val id = songId.trim()

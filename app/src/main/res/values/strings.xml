@@ -36,8 +36,8 @@
     <string name="youtube_filter_songs">Songs</string>
     <string name="youtube_filter_albums">Albums</string>
     <string name="youtube_filter_playlists">Playlists</string>
-    <string name="youtube_liked_empty">No liked videos on this account yet.</string>
-    <string name="youtube_liked_signed_out">Sign in to load your liked videos.</string>
+    <string name="youtube_liked_empty">No liked music on this account yet.</string>
+    <string name="youtube_liked_signed_out">Sign in to load your liked music.</string>
     <string name="youtube_sign_in">Sign in</string>
     <string name="youtube_sign_out">Sign out</string>
     <string name="youtube_sign_in_done">Done</string>

@@ -74,6 +74,7 @@ internal class YoutubeDownloader : Downloader() {
             .header("Referer", "$origin/")
             .header("X-Origin", origin)
             .header("X-Goog-AuthUser", "0")
+            .header("X-Goog-Api-Format-Version", "1")
             .apply {
                 if (!clientName.isNullOrBlank()) header("X-YouTube-Client-Name", clientName)
                 if (!clientVersion.isNullOrBlank()) header("X-YouTube-Client-Version", clientVersion)
@@ -120,8 +121,8 @@ internal class YoutubeDownloader : Downloader() {
                     val index = part.indexOf('=')
                     part.substring(0, index) to part.substring(index + 1)
                 }
-            val secret = values["__Secure-3PAPISID"].orEmpty()
-                .ifBlank { values["SAPISID"].orEmpty() }
+            val secret = values["SAPISID"].orEmpty()
+                .ifBlank { values["__Secure-3PAPISID"].orEmpty() }
                 .ifBlank { values["__Secure-1PAPISID"].orEmpty() }
             if (secret.isBlank()) return null
             val timestamp = System.currentTimeMillis() / 1000
