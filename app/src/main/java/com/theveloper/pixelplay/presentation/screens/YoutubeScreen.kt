@@ -187,6 +187,14 @@ fun YoutubeScreen(
     LaunchedEffect(stablePlayer.currentSong?.id) {
         stablePlayer.currentSong?.let(viewModel::rememberPlayed)
     }
+    // Resolve the streams the user is most likely to tap first, so playback is instant.
+    val warmUpCandidates = rows.ifEmpty { recent }.ifEmpty { uiState.shelves.flatMap { it.items } }
+    val warmUpKey = remember(warmUpCandidates) {
+        warmUpCandidates.asSequence().map { it.url }.take(4).joinToString()
+    }
+    LaunchedEffect(warmUpKey) {
+        if (warmUpCandidates.isNotEmpty()) viewModel.warmUpTracks(warmUpCandidates)
+    }
 
     if (uiState.collectionTitle != null) {
         BackHandler { viewModel.closeCollection() }

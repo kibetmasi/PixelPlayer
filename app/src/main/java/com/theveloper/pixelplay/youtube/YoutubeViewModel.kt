@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -44,6 +45,7 @@ class YoutubeViewModel @Inject constructor(
     val account: StateFlow<YoutubeAccount> = session.account
     private var searchJob: Job? = null
     private var likedJob: Job? = null
+    private var warmUpJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -225,6 +227,7 @@ class YoutubeViewModel @Inject constructor(
     }
 
     private fun clearCaches() {
+        warmUpJob?.cancel()
         client.resetIdentity()
         client.likedHits = emptyList()
         client.feedShelves = emptyList()
@@ -297,6 +300,26 @@ class YoutubeViewModel @Inject constructor(
                     }
                 },
             )
+        }
+    }
+
+    /**
+     * Resolves the first few tracks of a list in the background so tapping one starts
+     * playing without waiting for the stream lookup. The first resolve also primes the
+     * extractor's player-script cache, which is what makes the very first tap slow.
+     */
+    fun warmUpTracks(hits: List<YoutubeHit>) {
+        val tracks = hits.asSequence()
+            .filter { it.kind == YoutubeHit.Kind.TRACK }
+            .take(WARM_UP_COUNT)
+            .toList()
+        if (tracks.isEmpty()) return
+        warmUpJob?.cancel()
+        warmUpJob = viewModelScope.launch(Dispatchers.IO) {
+            tracks.forEach { hit ->
+                if (!isActive) return@launch
+                runCatching { client.prefetchTrack(hit.url) }
+            }
         }
     }
 
@@ -482,5 +505,9 @@ class YoutubeViewModel @Inject constructor(
                 },
             )
         }
+    }
+
+    private companion object {
+        const val WARM_UP_COUNT = 4
     }
 }

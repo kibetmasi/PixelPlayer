@@ -28,6 +28,7 @@ class YoutubeClient @Inject constructor(
 ) {
     private val downloader = YoutubeDownloader()
     private val resolveCache = ConcurrentHashMap<String, CachedResolve>()
+    private val inFlightResolves = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     @Volatile var feedShelves: List<YoutubeShelf> = emptyList()
     @Volatile var playlistHits: List<YoutubeHit> = emptyList()
     @Volatile var radioHits: List<YoutubeHit> = emptyList()
@@ -571,12 +572,27 @@ class YoutubeClient @Inject constructor(
             .toList()
     }
 
+    /**
+     * Resolves a stream ahead of a possible tap so playback can start immediately.
+     * Errors are swallowed: this is best effort, and a real tap will surface them.
+     */
+    fun prefetchTrack(watchUrl: String) {
+        val key = watchUrl.trim()
+        if (key.isBlank() || cachedTrack(key) != null) return
+        if (!inFlightResolves.add(key)) return
+        try {
+            resolveTrack(key)
+        } catch (error: Exception) {
+            Timber.d(error, "YouTube: prefetch failed for %s", key)
+        } finally {
+            inFlightResolves.remove(key)
+        }
+    }
+
     fun resolveTrack(watchUrl: String): YoutubeResolvedTrack {
         applySession()
         val key = watchUrl.trim()
-        resolveCache[key]?.takeIf {
-            System.currentTimeMillis() - it.cachedAtMs < RESOLVE_CACHE_TTL_MS
-        }?.let { return it.track }
+        cachedTrack(key)?.let { return it }
 
         val info = StreamInfo.getInfo(youtube(), key)
         val stream = pickBestAudioStream(info.audioStreams)
@@ -593,6 +609,10 @@ class YoutubeClient @Inject constructor(
         resolveCache[key] = CachedResolve(resolved, System.currentTimeMillis())
         return resolved
     }
+
+    private fun cachedTrack(key: String): YoutubeResolvedTrack? = resolveCache[key]
+        ?.takeIf { System.currentTimeMillis() - it.cachedAtMs < RESOLVE_CACHE_TTL_MS }
+        ?.track
 
     fun toSong(track: YoutubeResolvedTrack, watchUrl: String = track.watchUrl): Song {
         val permalink = watchUrl.ifBlank { track.watchUrl }.trim()
