@@ -116,10 +116,12 @@ private fun YoutubeWebLoginScreen(
             }
             Box(Modifier.fillMaxSize()) {
                 var openedLikedMusic by remember { mutableStateOf(false) }
+                var importing by remember { mutableStateOf(false) }
                 YoutubeWebView(
                     onProgress = { progress = it },
                     onWebViewCreated = { webView = it },
                     onCookiesMaybeReady = { url ->
+                        if (importing) return@YoutubeWebView
                         val cookies = extractYoutubeSession() ?: return@YoutubeWebView
                         val hasAuth = listOf("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID")
                             .any { key -> cookies.contains("$key=", ignoreCase = true) }
@@ -132,7 +134,19 @@ private fun YoutubeWebLoginScreen(
                             }
                             return@YoutubeWebView
                         }
-                        if (viewModel.importSession(cookies)) onClose()
+                        importing = true
+                        val view = webView
+                        if (view == null) {
+                            if (viewModel.importSession(cookies)) onClose() else importing = false
+                            return@YoutubeWebView
+                        }
+                        // Same trick KuroMusic/InnerTune use: read the page's InnerTube config
+                        // so requests carry the signed-in visitorData and channel (DATASYNC_ID).
+                        view.evaluateJavascript(IDENTITY_SCRIPT) { result ->
+                            val (visitor, dataSync) = parseIdentity(result)
+                            val fresh = extractYoutubeSession() ?: cookies
+                            if (viewModel.importSession(fresh, visitor, dataSync)) onClose() else importing = false
+                        }
                     },
                 )
             }
@@ -173,26 +187,53 @@ private fun YoutubeWebView(
     )
 }
 
+private const val IDENTITY_SCRIPT = """
+(function () {
+  try {
+    var cfg = (window.ytcfg && (ytcfg.data_ || (ytcfg.get && {VISITOR_DATA: ytcfg.get('VISITOR_DATA'), DATASYNC_ID: ytcfg.get('DATASYNC_ID')})))
+      || (window.yt && yt.config_) || {};
+    return JSON.stringify({ v: cfg.VISITOR_DATA || '', d: cfg.DATASYNC_ID || '' });
+  } catch (e) { return '{}'; }
+})()
+"""
+
+/** evaluateJavascript hands back a JSON string literal wrapping our JSON payload. */
+internal fun parseIdentity(result: String?): Pair<String, String> {
+    if (result.isNullOrBlank() || result == "null") return "" to ""
+    return runCatching {
+        val inner = org.json.JSONTokener(result).nextValue()
+        val json = when (inner) {
+            is org.json.JSONObject -> inner
+            is String -> org.json.JSONObject(inner)
+            else -> return "" to ""
+        }
+        json.optString("v").trim() to json.optString("d").trim()
+    }.getOrDefault("" to "")
+}
+
 internal fun extractYoutubeSession(): String? {
     val manager = CookieManager.getInstance()
     val map = linkedMapOf<String, String>()
+    // music.youtube.com first: those are the cookies YouTube Music itself sends. Other hosts only
+    // fill in names that are missing so we never overwrite a value with one from a different domain.
     listOf(
+        "https://music.youtube.com",
         "https://www.youtube.com",
         "https://youtube.com",
-        "https://music.youtube.com",
         "https://accounts.google.com",
         "https://google.com",
-    ).map { manager.getCookie(it).orEmpty() }
-        .joinToString("; ")
-        .split(';')
-        .map { it.trim() }
-        .filter { it.contains('=') }
-        .forEach { part ->
-            val index = part.indexOf('=')
-            val key = part.substring(0, index).trim()
-            val value = part.substring(index + 1).trim()
-            if (key.isNotEmpty() && value.isNotEmpty()) map[key] = value
-        }
+    ).forEach { host ->
+        manager.getCookie(host).orEmpty()
+            .split(';')
+            .map { it.trim() }
+            .filter { it.contains('=') }
+            .forEach { part ->
+                val index = part.indexOf('=')
+                val key = part.substring(0, index).trim()
+                val value = part.substring(index + 1).trim()
+                if (key.isNotEmpty() && value.isNotEmpty() && !map.containsKey(key)) map[key] = value
+            }
+    }
     val signedIn = map.keys.any { key ->
         key.equals("SAPISID", ignoreCase = true) ||
             key.equals("__Secure-1PAPISID", ignoreCase = true) ||

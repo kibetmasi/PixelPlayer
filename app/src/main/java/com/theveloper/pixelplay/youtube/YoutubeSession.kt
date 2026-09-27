@@ -16,6 +16,10 @@ import javax.inject.Singleton
 data class YoutubeAccount(
     val cookieHeader: String = "",
     val displayName: String = "",
+    /** InnerTube visitorData captured from the signed-in music.youtube.com page. */
+    val visitorData: String = "",
+    /** DATASYNC_ID of the signed-in channel; sent as context.user.onBehalfOfUser. */
+    val dataSyncId: String = "",
 ) {
     val isSignedIn: Boolean
         get() = listOf("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID")
@@ -38,16 +42,47 @@ class YoutubeSession @Inject constructor(
 
     fun generation(): Int = generation.get()
 
-    fun save(cookieHeader: String, displayName: String = "") {
+    fun save(
+        cookieHeader: String,
+        displayName: String = "",
+        visitorData: String = "",
+        dataSyncId: String = "",
+    ) {
         val account = YoutubeAccount(
             cookieHeader = cookieHeader.trim(),
             displayName = displayName.trim().ifBlank { "Signed in" },
+            visitorData = visitorData.trim(),
+            dataSyncId = normalizeDataSyncId(dataSyncId),
         )
         prefs.edit()
             .putString(KEY_COOKIES, account.cookieHeader)
             .putString(KEY_NAME, account.displayName)
+            .putString(KEY_VISITOR, account.visitorData)
+            .putString(KEY_DATASYNC, account.dataSyncId)
             .apply()
         _account.value = account
+    }
+
+    /** Fills in identity fields discovered after sign-in without touching the cookies. */
+    fun updateIdentity(
+        visitorData: String? = null,
+        dataSyncId: String? = null,
+        displayName: String? = null,
+    ) {
+        val current = _account.value
+        if (!current.isSignedIn) return
+        val updated = current.copy(
+            visitorData = visitorData?.trim()?.takeIf { it.isNotEmpty() } ?: current.visitorData,
+            dataSyncId = dataSyncId?.let(::normalizeDataSyncId)?.takeIf { it.isNotEmpty() } ?: current.dataSyncId,
+            displayName = displayName?.trim()?.takeIf { it.isNotEmpty() } ?: current.displayName,
+        )
+        if (updated == current) return
+        prefs.edit()
+            .putString(KEY_NAME, updated.displayName)
+            .putString(KEY_VISITOR, updated.visitorData)
+            .putString(KEY_DATASYNC, updated.dataSyncId)
+            .apply()
+        _account.value = updated
     }
 
     fun clear() {
@@ -88,11 +123,22 @@ class YoutubeSession @Inject constructor(
     private fun read(): YoutubeAccount = YoutubeAccount(
         cookieHeader = prefs.getString(KEY_COOKIES, "").orEmpty(),
         displayName = prefs.getString(KEY_NAME, "").orEmpty(),
+        visitorData = prefs.getString(KEY_VISITOR, "").orEmpty(),
+        dataSyncId = prefs.getString(KEY_DATASYNC, "").orEmpty(),
     )
 
     companion object {
         private const val PREFS = "youtube_session"
         private const val KEY_COOKIES = "cookies"
         private const val KEY_NAME = "display_name"
+        private const val KEY_VISITOR = "visitor_data"
+        private const val KEY_DATASYNC = "datasync_id"
+
+        /** DATASYNC_ID looks like "channel||user"; InnerTube wants the first non-empty part. */
+        fun normalizeDataSyncId(raw: String): String {
+            val trimmed = raw.trim()
+            if (!trimmed.contains("||")) return trimmed
+            return trimmed.split("||").map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+        }
     }
 }

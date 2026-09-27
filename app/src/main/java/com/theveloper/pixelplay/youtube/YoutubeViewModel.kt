@@ -198,22 +198,44 @@ class YoutubeViewModel @Inject constructor(
         musicStore.rememberRecent(song)
     }
 
-    fun importSession(cookieHeader: String): Boolean {
+    fun importSession(cookieHeader: String, visitorData: String = "", dataSyncId: String = ""): Boolean {
         val normalized = cookieHeader.trim()
         val signedIn = listOf("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID")
             .any { key -> normalized.contains("$key=", ignoreCase = true) }
         if (!signedIn) return false
-        session.save(normalized)
-        if (_uiState.value.section == YoutubeSection.LIKED) loadLiked(refreshing = true)
-        if (_uiState.value.section == YoutubeSection.HOME) loadFeed(refreshing = true)
+        session.save(normalized, visitorData = visitorData, dataSyncId = dataSyncId)
+        clearCaches()
+        val epoch = session.generation()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { client.refreshIdentity() }
+                val name = runCatching { client.loadAccountName() }.getOrDefault("")
+                if (name.isNotBlank() && session.generation() == epoch) session.updateIdentity(displayName = name)
+            }
+            if (session.generation() != epoch) return@launch
+            when (_uiState.value.section) {
+                YoutubeSection.LIKED -> loadLiked(refreshing = true)
+                YoutubeSection.HOME -> loadFeed(refreshing = true)
+                YoutubeSection.PLAYLISTS -> loadPlaylists(refreshing = true)
+                YoutubeSection.RADIO -> loadRadioStations(refreshing = true)
+                else -> Unit
+            }
+        }
         return true
+    }
+
+    private fun clearCaches() {
+        client.resetIdentity()
+        client.likedHits = emptyList()
+        client.feedShelves = emptyList()
+        client.playlistHits = emptyList()
+        client.radioHits = emptyList()
     }
 
     fun signOut() {
         likedJob?.cancel()
         session.clear()
-        client.likedHits = emptyList()
-        client.feedShelves = emptyList()
+        clearCaches()
         _uiState.update {
             it.copy(error = null, results = emptyList(), isLoading = false, isRefreshing = false)
         }
@@ -308,29 +330,40 @@ class YoutubeViewModel @Inject constructor(
             }
             val built = runCatching {
                 withContext(Dispatchers.IO) {
-                    val yours = if (session.isSignedIn()) {
+                    val signedIn = session.isSignedIn()
+                    // Signed in: the real YouTube Music home (Quick picks, Listen again, Mixed for you...).
+                    val home = if (signedIn) runCatching { client.loadHome() }.getOrElse { emptyList() } else emptyList()
+                    val liked = if (signedIn) {
                         runCatching { client.loadLikedMusic(24) }.getOrDefault(emptyList())
                     } else {
                         emptyList()
-                    }.ifEmpty { musicStore.recent.value }
+                    }
+                    val yours = liked.ifEmpty { musicStore.recent.value }
                     val mix = yours.ifEmpty {
-                        if (session.isSignedIn()) emptyList()
+                        if (signedIn) emptyList()
                         else runCatching { client.loadTrendingMusic(18) }.getOrDefault(emptyList())
                     }
-                    val followed = if (session.isSignedIn() && yours.isEmpty()) {
+                    val followed = if (signedIn && home.isEmpty() && yours.isEmpty()) {
                         runCatching { client.loadSubscriptionFeed(12) }.getOrDefault(emptyList())
                     } else {
                         emptyList()
                     }
+                    val radioSeeds = (liked.ifEmpty { home.flatMap { it.items } }.filter { it.kind == YoutubeHit.Kind.TRACK })
+                        .ifEmpty { musicStore.recent.value }
                     listOfNotNull(
-                        mix.takeIf { it.isNotEmpty() }?.let {
+                        mix.takeIf { it.isNotEmpty() && (home.isEmpty() || liked.isNotEmpty()) }?.let {
                             YoutubeShelf(
                                 id = "yours",
-                                title = if (yours.isNotEmpty()) "For you" else "Trending songs",
+                                title = when {
+                                    liked.isNotEmpty() -> "Your likes"
+                                    signedIn -> "For you"
+                                    else -> "Trending songs"
+                                },
                                 items = it,
                             )
                         },
-                        mix.shuffled().take(12).takeIf { it.isNotEmpty() && yours.isNotEmpty() }?.let {
+                    ) + home + listOfNotNull(
+                        radioSeeds.shuffled().take(12).takeIf { it.isNotEmpty() && signedIn }?.let {
                             YoutubeShelf("radio", "Radio", it, startsRadio = true)
                         },
                         followed.takeIf { it.isNotEmpty() }?.let {
@@ -364,9 +397,14 @@ class YoutubeViewModel @Inject constructor(
             }
             val loaded = runCatching {
                 withContext(Dispatchers.IO) {
-                    listOf("today's hits", "workout", "focus", "party").flatMap { query ->
-                        runCatching { client.search(query, YoutubeSearchFilter.PLAYLISTS, 6) }.getOrDefault(emptyList())
-                    }.distinctBy { it.url }
+                    if (session.isSignedIn()) {
+                        // The user's own YouTube Music library, never generic search results.
+                        client.loadLibraryPlaylists()
+                    } else {
+                        listOf("today's hits", "workout", "focus", "party").flatMap { query ->
+                            runCatching { client.search(query, YoutubeSearchFilter.PLAYLISTS, 6) }.getOrDefault(emptyList())
+                        }.distinctBy { it.url }
+                    }
                 }
             }
             loaded.fold(

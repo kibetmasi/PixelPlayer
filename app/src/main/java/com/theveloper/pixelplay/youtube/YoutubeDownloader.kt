@@ -80,10 +80,8 @@ internal class YoutubeDownloader : Downloader() {
                 if (!clientVersion.isNullOrBlank()) header("X-YouTube-Client-Version", clientVersion)
                 visitorId?.takeIf { it.isNotBlank() }?.let { header("X-Goog-Visitor-Id", it) }
                 if (cookies.isNotEmpty()) {
-                    header("X-YouTube-Bootstrap-Logged-In", "true")
-                    val cookieHeader = if (cookies.contains("SOCS=")) cookies else "$cookies; SOCS=CAI"
-                    header("Cookie", cookieHeader)
-                    authorization(cookieHeader, origin)?.let { header("Authorization", it) }
+                    header("Cookie", cookies)
+                    authorization(cookies, origin)?.let { header("Authorization", it) }
                 }
             }
             .build()
@@ -97,11 +95,19 @@ internal class YoutubeDownloader : Downloader() {
         }
     }
 
-    fun getText(url: String, userAgent: String): String {
+    fun getText(url: String, userAgent: String, withCookies: Boolean = false): String {
+        val cookies = cookieHeader?.trim().orEmpty()
         val request = okhttp3.Request.Builder()
             .url(url)
             .header("User-Agent", userAgent)
             .header("Accept-Language", "en-US,en;q=0.9")
+            .apply {
+                if (withCookies && cookies.isNotEmpty()) {
+                    header("Cookie", cookies)
+                    authorization(cookies, "https://music.youtube.com")?.let { header("Authorization", it) }
+                    header("X-Goog-AuthUser", "0")
+                }
+            }
             .build()
         client.newCall(request).execute().use { response ->
             return response.body.string()

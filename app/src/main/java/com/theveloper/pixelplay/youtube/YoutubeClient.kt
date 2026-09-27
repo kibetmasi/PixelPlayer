@@ -33,6 +33,7 @@ class YoutubeClient @Inject constructor(
     @Volatile var radioHits: List<YoutubeHit> = emptyList()
     @Volatile var likedHits: List<YoutubeHit> = emptyList()
     @Volatile private var visitorId: String? = null
+    @Volatile private var identityChecked = false
 
     private data class CachedResolve(
         val track: YoutubeResolvedTrack,
@@ -84,8 +85,13 @@ class YoutubeClient @Inject constructor(
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        browseLiked("VLLM", hits, limit)
-        if (hits.isEmpty()) throw IllegalStateException("YouTube Music returned no liked songs.")
+        val loggedIn = browseLiked("VLLM", hits, limit)
+        if (hits.isEmpty()) {
+            throw IllegalStateException(
+                if (loggedIn == false) "YouTube Music did not accept this session. Sign in again from Account."
+                else "YouTube Music returned no liked songs.",
+            )
+        }
         return hits.take(limit).toList()
     }
 
@@ -97,42 +103,384 @@ class YoutubeClient @Inject constructor(
         return hits.take(limit).toList()
     }
 
+    /**
+     * Personalized YouTube Music home (Quick picks, Listen again, Mixed for you, ...).
+     * Requires a signed-in session; anonymous sessions only get regional charts.
+     */
+    fun loadHome(maxShelves: Int = 8): List<YoutubeShelf> {
+        applySession()
+        if (!session.isSignedIn()) return emptyList()
+        val shelves = mutableListOf<YoutubeShelf>()
+        var root = musicBrowse(browseId = "FEmusic_home")
+        var sectionList = root.optJSONObject("contents")
+            ?.optJSONObject("singleColumnBrowseResultsRenderer")
+            ?.optJSONArray("tabs")
+            ?.optJSONObject(0)
+            ?.optJSONObject("tabRenderer")
+            ?.optJSONObject("content")
+            ?.optJSONObject("sectionListRenderer")
+        var page = 0
+        while (sectionList != null && shelves.size < maxShelves && page < 3) {
+            collectCarouselShelves(sectionList.optJSONArray("contents"), shelves)
+            val continuation = findContinuation(sectionList.opt("continuations")) ?: break
+            if (shelves.size >= maxShelves) break
+            root = musicBrowse(continuation = continuation)
+            sectionList = root.optJSONObject("continuationContents")?.optJSONObject("sectionListContinuation")
+            page++
+        }
+        return shelves.take(maxShelves)
+    }
+
+    /** Playlists saved in the user's YouTube Music library (FEmusic_liked_playlists). */
+    fun loadLibraryPlaylists(limit: Int = 60): List<YoutubeHit> {
+        applySession()
+        if (!session.isSignedIn()) return emptyList()
+        val hits = linkedSetOf<YoutubeHit>()
+        var root = musicBrowse(browseId = "FEmusic_liked_playlists")
+        var grid = root.optJSONObject("contents")
+            ?.optJSONObject("singleColumnBrowseResultsRenderer")
+            ?.optJSONArray("tabs")
+            ?.optJSONObject(0)
+            ?.optJSONObject("tabRenderer")
+            ?.optJSONObject("content")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.let { contents ->
+                (0 until contents.length()).firstNotNullOfOrNull { index ->
+                    val section = contents.optJSONObject(index) ?: return@firstNotNullOfOrNull null
+                    section.optJSONObject("gridRenderer") ?: section.optJSONObject("musicShelfRenderer")
+                }
+            }
+        var page = 0
+        while (grid != null && hits.size < limit && page < 4) {
+            collectShelfItems(grid.optJSONArray("items") ?: grid.optJSONArray("contents"), hits, limit)
+            val continuation = findContinuation(grid.opt("continuations")) ?: break
+            root = musicBrowse(continuation = continuation)
+            grid = root.optJSONObject("continuationContents")?.let { cont ->
+                cont.optJSONObject("gridContinuation") ?: cont.optJSONObject("musicShelfContinuation")
+            }
+            page++
+        }
+        return hits.filter { it.kind == YoutubeHit.Kind.COLLECTION && !it.url.contains("list=LM") }
+            .take(limit)
+    }
+
+    /** Verifies the session against InnerTube and returns the signed-in account name. */
+    fun loadAccountName(): String {
+        applySession()
+        if (!session.isSignedIn()) return ""
+        val root = musicPost("account/account_menu", """{"context":${musicContext()}}""")
+        val header = root.optJSONArray("actions")
+            ?.optJSONObject(0)
+            ?.optJSONObject("openPopupAction")
+            ?.optJSONObject("popup")
+            ?.optJSONObject("multiPageMenuRenderer")
+            ?.optJSONObject("header")
+            ?.optJSONObject("activeAccountHeaderRenderer")
+            ?: throw IllegalStateException("YouTube Music did not recognise this session.")
+        return jsonText(header.optJSONObject("accountName"))
+    }
+
+    /**
+     * Makes sure visitorData/dataSyncId for the signed-in account are known.
+     * Mirrors KuroMusic: visitorData from sw.js_data (with cookies), dataSyncId from the page config.
+     */
+    fun resetIdentity() {
+        identityChecked = false
+        visitorId = null
+    }
+
+    fun refreshIdentity() {
+        applySession()
+        val account = session.account.value
+        if (!account.isSignedIn) return
+        identityChecked = true
+        var visitor = account.visitorData
+        var dataSync = account.dataSyncId
+        if (visitor.isBlank()) visitor = fetchVisitorFromServiceWorker()
+        if (visitor.isBlank() || dataSync.isBlank()) {
+            val html = runCatching {
+                downloader.getText("https://music.youtube.com/", MUSIC_USER_AGENT, withCookies = true)
+            }.getOrNull().orEmpty()
+            if (visitor.isBlank()) visitor = configValue(html, "VISITOR_DATA")
+            if (dataSync.isBlank()) dataSync = configValue(html, "DATASYNC_ID")
+        }
+        session.updateIdentity(visitorData = visitor, dataSyncId = dataSync)
+    }
+
+    private fun fetchVisitorFromServiceWorker(): String {
+        val body = runCatching {
+            downloader.getText("https://music.youtube.com/sw.js_data", MUSIC_USER_AGENT, withCookies = true)
+        }.getOrNull().orEmpty()
+        if (body.length < 6) return ""
+        return runCatching {
+            val candidates = JSONArray(body.substring(5)).optJSONArray(0)?.optJSONArray(2) ?: return ""
+            (0 until candidates.length()).asSequence()
+                .mapNotNull { candidates.opt(it) as? String }
+                .firstOrNull { VISITOR_REGEX.containsMatchIn(it) }
+                .orEmpty()
+        }.getOrDefault("")
+    }
+
+    private fun configValue(html: String, key: String): String {
+        val raw = Regex(""""$key"\s*:\s*"([^"]*)"""").find(html)?.groupValues?.getOrNull(1).orEmpty()
+        return raw.replace("\\/", "/").replace("\\u003d", "=").replace("\\u0026", "&")
+    }
+
+    /** Returns null when the response did not say whether the session is logged in. */
     private fun browseLiked(
         browseId: String,
         hits: MutableSet<YoutubeHit>,
         limit: Int,
-    ) {
-        val visitor = musicVisitorId().ifBlank { INNER_TUNE_VISITOR }
-        val context = """
-            {"client":{"clientName":"WEB_REMIX","clientVersion":"$MUSIC_CLIENT_VERSION","gl":"US","hl":"en","visitorData":${JSONObject.quote(visitor)}}}
-        """.trim()
+    ): Boolean? {
+        var loggedIn: Boolean? = null
         var continuation: String? = null
         repeat(6) {
+            if (hits.size >= limit) return loggedIn
+            val root = musicBrowse(browseId = browseId, continuation = continuation)
+            if (loggedIn == null) loggedIn = loggedInFlag(root)
+            collectLikedShelf(root, hits, limit)
+            continuation = findPlaylistContinuation(root) ?: return loggedIn
+        }
+        return loggedIn
+    }
+
+    private fun musicBrowse(
+        browseId: String? = null,
+        continuation: String? = null,
+        params: String? = null,
+    ): JSONObject {
+        val account = session.account.value
+        if (account.isSignedIn && account.visitorData.isBlank() && !identityChecked) {
+            identityChecked = true
+            runCatching { refreshIdentity() }
+        }
+        val body = JSONObject()
+            .put("context", JSONObject(musicContext()))
+            .apply {
+                if (!browseId.isNullOrBlank()) put("browseId", browseId)
+                if (!params.isNullOrBlank()) put("params", params)
+                if (!continuation.isNullOrBlank()) put("continuation", continuation)
+            }
+        val query = if (continuation.isNullOrBlank()) "" else {
+            val token = java.net.URLEncoder.encode(continuation, Charsets.UTF_8.name())
+            "&continuation=$token&ctoken=$token&type=next"
+        }
+        return musicPost("browse", body.toString(), query)
+    }
+
+    private fun musicPost(endpoint: String, body: String, query: String = ""): JSONObject {
+        val json = downloader.postJson(
+            url = "https://music.youtube.com/youtubei/v1/$endpoint?prettyPrint=false&key=$MUSIC_API_KEY$query",
+            json = body,
+            origin = "https://music.youtube.com",
+            clientName = MUSIC_CLIENT_ID,
+            clientVersion = MUSIC_CLIENT_VERSION,
+            userAgent = MUSIC_USER_AGENT,
+            visitorId = currentVisitor(),
+        )
+        return JSONObject(json)
+    }
+
+    private fun currentVisitor(): String {
+        val account = session.account.value
+        if (account.isSignedIn && account.visitorData.isNotBlank()) return account.visitorData
+        return musicVisitorId().ifBlank { INNER_TUNE_VISITOR }
+    }
+
+    private fun musicContext(): String {
+        val account = session.account.value
+        val client = JSONObject()
+            .put("clientName", "WEB_REMIX")
+            .put("clientVersion", MUSIC_CLIENT_VERSION)
+            .put("gl", "US")
+            .put("hl", "en")
+            .put("visitorData", currentVisitor())
+        val context = JSONObject().put("client", client)
+        val user = JSONObject().put("lockedSafetyMode", false)
+        if (account.isSignedIn && account.dataSyncId.isNotBlank()) {
+            user.put("onBehalfOfUser", account.dataSyncId)
+        }
+        context.put("user", user)
+        return context.toString()
+    }
+
+    private fun loggedInFlag(root: JSONObject): Boolean? {
+        val services = root.optJSONObject("responseContext")?.optJSONArray("serviceTrackingParams") ?: return null
+        for (index in 0 until services.length()) {
+            val params = services.optJSONObject(index)?.optJSONArray("params") ?: continue
+            for (p in 0 until params.length()) {
+                val param = params.optJSONObject(p) ?: continue
+                if (param.optString("key") == "logged_in") return param.optString("value") == "1"
+            }
+        }
+        return null
+    }
+
+    private fun collectCarouselShelves(sections: JSONArray?, shelves: MutableList<YoutubeShelf>) {
+        if (sections == null) return
+        for (index in 0 until sections.length()) {
+            val carousel = sections.optJSONObject(index)?.optJSONObject("musicCarouselShelfRenderer") ?: continue
+            val title = jsonText(
+                carousel.optJSONObject("header")
+                    ?.optJSONObject("musicCarouselShelfBasicHeaderRenderer")
+                    ?.optJSONObject("title"),
+            ).ifBlank { "For you" }
+            val hits = linkedSetOf<YoutubeHit>()
+            collectShelfItems(carousel.optJSONArray("contents"), hits, 30)
+            if (hits.isEmpty()) continue
+            val id = "home_${index}_${title.hashCode().toUInt()}"
+            if (shelves.any { it.id == id }) continue
+            shelves += YoutubeShelf(id = id, title = title, items = hits.toList())
+        }
+    }
+
+    private fun collectShelfItems(items: JSONArray?, hits: MutableSet<YoutubeHit>, limit: Int) {
+        if (items == null) return
+        for (index in 0 until items.length()) {
             if (hits.size >= limit) return
-            val url = buildString {
-                append("https://music.youtube.com/youtubei/v1/browse?prettyPrint=false&key=$MUSIC_API_KEY")
-                if (!continuation.isNullOrBlank()) {
-                    val token = java.net.URLEncoder.encode(continuation, Charsets.UTF_8.name())
-                    append("&continuation=$token&ctoken=$token&type=next")
+            val item = items.optJSONObject(index) ?: continue
+            item.optJSONObject("musicTwoRowItemRenderer")?.let { twoRowHit(it) }?.let { hits += it }
+            item.optJSONObject("musicResponsiveListItemRenderer")?.let { listItemHit(it) }?.let { hits += it }
+        }
+    }
+
+    private fun twoRowHit(renderer: JSONObject): YoutubeHit? {
+        val title = jsonText(renderer.optJSONObject("title")).trim()
+        if (title.isBlank()) return null
+        val subtitle = jsonText(renderer.optJSONObject("subtitle")).trim()
+        val navigation = renderer.optJSONObject("navigationEndpoint")
+        val thumbnail = lastThumbnail(
+            renderer.optJSONObject("thumbnailRenderer")
+                ?.optJSONObject("musicThumbnailRenderer")
+                ?.optJSONObject("thumbnail"),
+        )
+        navigation?.optJSONObject("watchEndpoint")?.let { watch ->
+            val videoId = watch.optString("videoId")
+            val playlistId = watch.optString("playlistId")
+            if (videoId.length == 11) {
+                val isMix = playlistId.startsWith("RD") && !playlistId.startsWith("RDAMVM")
+                return YoutubeHit(
+                    url = if (isMix) "https://www.youtube.com/watch?v=$videoId&list=$playlistId"
+                    else "https://music.youtube.com/watch?v=$videoId",
+                    title = title,
+                    artist = subtitle.ifBlank { "YouTube Music" },
+                    durationSec = 0,
+                    thumbnailUrl = if (isMix) thumbnail else fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
+                    kind = if (isMix) YoutubeHit.Kind.COLLECTION else YoutubeHit.Kind.TRACK,
+                )
+            }
+        }
+        navigation?.optJSONObject("watchPlaylistEndpoint")?.optString("playlistId")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { playlistId ->
+                return YoutubeHit(
+                    url = "https://music.youtube.com/playlist?list=$playlistId",
+                    title = title,
+                    artist = subtitle.ifBlank { "YouTube Music" },
+                    durationSec = 0,
+                    thumbnailUrl = thumbnail,
+                    kind = YoutubeHit.Kind.COLLECTION,
+                )
+            }
+        val browseId = navigation?.optJSONObject("browseEndpoint")?.optString("browseId").orEmpty()
+        val playlistId = renderer.optJSONObject("thumbnailOverlay")
+            ?.optJSONObject("musicItemThumbnailOverlayRenderer")
+            ?.optJSONObject("content")
+            ?.optJSONObject("musicPlayButtonRenderer")
+            ?.optJSONObject("playNavigationEndpoint")
+            ?.let { play ->
+                play.optJSONObject("watchPlaylistEndpoint")?.optString("playlistId")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: play.optJSONObject("watchEndpoint")?.optString("playlistId")?.takeIf { it.isNotBlank() }
+            }
+            ?: browseId.takeIf { it.startsWith("VL") }?.removePrefix("VL")
+        if (playlistId.isNullOrBlank()) return null
+        if (browseId.startsWith("UC") || browseId.startsWith("MPLA")) return null // artists
+        return YoutubeHit(
+            url = "https://music.youtube.com/playlist?list=$playlistId",
+            title = title,
+            artist = subtitle.ifBlank { "YouTube Music" },
+            durationSec = 0,
+            thumbnailUrl = thumbnail,
+            kind = YoutubeHit.Kind.COLLECTION,
+        )
+    }
+
+    private fun listItemHit(renderer: JSONObject): YoutubeHit? {
+        val title = flexColumnText(renderer, 0).trim()
+        if (title.isBlank()) return null
+        val videoId = renderer.optJSONObject("playlistItemData")?.optString("videoId").orEmpty()
+            .ifBlank { firstVideoId(renderer.optJSONObject("overlay")) }
+            .ifBlank {
+                renderer.optJSONObject("navigationEndpoint")?.optJSONObject("watchEndpoint")?.optString("videoId").orEmpty()
+            }
+        if (videoId.length == 11) {
+            return YoutubeHit(
+                url = "https://music.youtube.com/watch?v=$videoId",
+                title = title,
+                artist = flexColumnText(renderer, 1).ifBlank { "YouTube Music" },
+                durationSec = 0,
+                thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
+                kind = YoutubeHit.Kind.TRACK,
+            )
+        }
+        val browseId = renderer.optJSONObject("navigationEndpoint")
+            ?.optJSONObject("browseEndpoint")
+            ?.optString("browseId")
+            .orEmpty()
+        val playlistId = browseId.takeIf { it.startsWith("VL") }?.removePrefix("VL")
+            ?: firstPlaylistId(renderer.optJSONObject("overlay"))
+        if (playlistId.isBlank()) return null
+        return YoutubeHit(
+            url = "https://music.youtube.com/playlist?list=$playlistId",
+            title = title,
+            artist = flexColumnText(renderer, 1).ifBlank { "YouTube Music" },
+            durationSec = 0,
+            thumbnailUrl = lastThumbnail(
+                renderer.optJSONObject("thumbnail")?.optJSONObject("musicThumbnailRenderer")?.optJSONObject("thumbnail"),
+            ),
+            kind = YoutubeHit.Kind.COLLECTION,
+        )
+    }
+
+    private fun firstPlaylistId(node: JSONObject?): String {
+        if (node == null) return ""
+        node.optString("playlistId").takeIf { it.isNotBlank() }?.let { return it }
+        val keys = node.keys()
+        while (keys.hasNext()) {
+            when (val child = node.opt(keys.next())) {
+                is JSONObject -> firstPlaylistId(child).takeIf { it.isNotBlank() }?.let { return it }
+                is JSONArray -> {
+                    for (index in 0 until child.length()) {
+                        (child.opt(index) as? JSONObject)?.let { item ->
+                            firstPlaylistId(item).takeIf { it.isNotBlank() }?.let { return it }
+                        }
+                    }
                 }
             }
-            val body = if (continuation.isNullOrBlank()) {
-                """{"context":$context,"browseId":"$browseId"}"""
-            } else {
-                """{"context":$context,"continuation":${JSONObject.quote(continuation)}}"""
+        }
+        return ""
+    }
+
+    private fun lastThumbnail(thumbnail: JSONObject?): String? {
+        val list = thumbnail?.optJSONArray("thumbnails") ?: return null
+        var best: String? = null
+        var bestSize = -1
+        for (index in 0 until list.length()) {
+            val entry = list.optJSONObject(index) ?: continue
+            val size = entry.optInt("width", 0)
+            val url = entry.optString("url").takeIf { it.isNotBlank() } ?: continue
+            if (size >= bestSize) {
+                bestSize = size
+                best = url
             }
-            val json = downloader.postJson(
-                url = url,
-                json = body,
-                origin = "https://music.youtube.com",
-                clientName = MUSIC_CLIENT_ID,
-                clientVersion = MUSIC_CLIENT_VERSION,
-                userAgent = MUSIC_USER_AGENT,
-                visitorId = visitor,
-            )
-            val root = JSONObject(json)
-            collectLikedShelf(root, hits, limit)
-            continuation = findPlaylistContinuation(root) ?: return
+        }
+        return best?.let { url ->
+            // Ask Google's image CDN for a larger square when the URL is a googleusercontent one.
+            if (url.contains("googleusercontent.com") && url.contains("=w")) {
+                url.replace(Regex("=w\\d+-h\\d+"), "=w544-h544")
+            } else fullBleedArtwork(url)
         }
     }
 
@@ -213,6 +561,7 @@ class YoutubeClient @Inject constructor(
 
     fun loadCollectionTracks(url: String, limit: Int = 80): List<YoutubeHit> {
         applySession()
+        if (url.contains("list=LM")) return loadLikedVideos(limit)
         val info = PlaylistInfo.getInfo(youtube(), url.trim())
         return info.relatedItems
             .asSequence()
@@ -517,6 +866,7 @@ class YoutubeClient @Inject constructor(
         private const val MUSIC_CLIENT_ID = "67"
         private const val MUSIC_CLIENT_VERSION = "1.20260804.16.00"
         private const val INNER_TUNE_VISITOR = "CgtsZG1ySnZiQWtSbyiMjuGSBg=="
+        private val VISITOR_REGEX = Regex("^Cg[ts]")
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {
             val id = songId.trim()
