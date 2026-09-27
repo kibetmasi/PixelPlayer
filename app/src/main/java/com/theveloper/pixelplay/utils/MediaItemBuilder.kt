@@ -14,6 +14,7 @@ import androidx.media3.common.util.UnstableApi
 import com.theveloper.pixelplay.data.provider.SharedArtworkContentProvider
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.soundcloud.SoundCloudClient
+import com.theveloper.pixelplay.youtube.YoutubeClient
 import java.io.File
 
 object MediaItemBuilder {
@@ -100,13 +101,15 @@ object MediaItemBuilder {
     const val EXTERNAL_EXTRA_NAVIDROME_ID = EXTERNAL_EXTRA_PREFIX + "NAVIDROME_ID"
 
     fun build(song: Song): MediaItem {
-        return withSoundCloudPermalink(
-            MediaItem.Builder()
-                .setMediaId(song.id)
-                .setUri(playbackUri(song))
-                .setMimeType(playbackMimeType(song))
-                .setMediaMetadata(buildMediaMetadataForSong(song))
-                .build(),
+        return withYoutubeWatchUrl(
+            withSoundCloudPermalink(
+                MediaItem.Builder()
+                    .setMediaId(song.id)
+                    .setUri(playbackUri(song))
+                    .setMimeType(playbackMimeType(song))
+                    .setMediaMetadata(buildMediaMetadataForSong(song))
+                    .build(),
+            ),
         )
     }
 
@@ -128,6 +131,7 @@ object MediaItemBuilder {
                 )
                 .build()
                 .let(::withSoundCloudPermalink)
+                .let(::withYoutubeWatchUrl)
         }
     }
 
@@ -138,6 +142,18 @@ object MediaItemBuilder {
         val metadata = item.mediaMetadata
         val extras = Bundle(metadata.extras ?: Bundle())
         extras.putString(SoundCloudClient.EXTRA_PERMALINK, permalink)
+        return item.buildUpon()
+            .setMediaMetadata(metadata.buildUpon().setExtras(extras).build())
+            .build()
+    }
+
+    fun withYoutubeWatchUrl(item: MediaItem): MediaItem {
+        val watchUrl = item.mediaMetadata.extras?.getString(YoutubeClient.EXTRA_WATCH_URL)
+            ?: YoutubeClient.watchUrlForSongId(item.mediaId)
+            ?: return item
+        val metadata = item.mediaMetadata
+        val extras = Bundle(metadata.extras ?: Bundle())
+        extras.putString(YoutubeClient.EXTRA_WATCH_URL, watchUrl)
         return item.buildUpon()
             .setMediaMetadata(metadata.buildUpon().setExtras(extras).build())
             .build()

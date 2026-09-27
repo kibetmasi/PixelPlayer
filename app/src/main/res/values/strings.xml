@@ -8,9 +8,51 @@
 
     <!-- Navigation Bar Labels -->
     <string name="nav_bar_home">Home</string>
+    <string name="nav_bar_feed">Feed</string>
+    <string name="nav_bar_radio">Radio</string>
+    <string name="nav_bar_playlists">Playlists</string>
     <string name="nav_bar_search">Search</string>
+    <string name="nav_bar_liked">Liked</string>
     <string name="nav_bar_soundcloud">SoundCloud</string>
     <string name="nav_bar_library">Library</string>
+
+    <string name="youtube_home_title">Feed</string>
+    <string name="youtube_home_subtitle">Trending, radio, and playlists</string>
+    <string name="youtube_radio_title">Radio</string>
+    <string name="youtube_playlists_title">Playlists</string>
+    <string name="youtube_search_title">Search</string>
+    <string name="youtube_liked_title">Liked</string>
+    <string name="youtube_saved_title">Saved</string>
+    <string name="youtube_chip_home">Home</string>
+    <string name="youtube_chip_liked">Liked</string>
+    <string name="youtube_chip_saved">Saved</string>
+    <string name="youtube_like">Like</string>
+    <string name="youtube_unlike">Unlike</string>
+    <string name="youtube_save">Save</string>
+    <string name="youtube_unsave">Remove save</string>
+    <string name="youtube_search_placeholder">Songs, albums, playlists</string>
+    <string name="youtube_filter_songs">Songs</string>
+    <string name="youtube_filter_albums">Albums</string>
+    <string name="youtube_filter_playlists">Playlists</string>
+    <string name="youtube_liked_empty">No liked videos on this account yet.</string>
+    <string name="youtube_liked_signed_out">Sign in to load your liked videos.</string>
+    <string name="youtube_sign_in">Sign in</string>
+    <string name="youtube_sign_out">Sign out</string>
+    <string name="youtube_sign_in_done">Done</string>
+    <string name="youtube_sign_in_incomplete">Finish signing in, then tap Done.</string>
+    <string name="youtube_saved_empty">Saved songs show up here.</string>
+    <string name="youtube_search_empty">Search YouTube Music.</string>
+    <string name="youtube_home_empty">The feed is unavailable right now.</string>
+    <string name="youtube_radio_empty">Radio stations are unavailable right now.</string>
+    <string name="youtube_playlists_empty">Playlists are unavailable right now.</string>
+    <string name="youtube_radio_from">Radio from %1$s</string>
+    <string name="youtube_todays_mix">Today\'s Mix for you</string>
+    <string name="youtube_account_title">Account</string>
+    <string name="youtube_account_body">Sign in with the Google account you use for YouTube. Liked videos and your subscription feed load from that account.</string>
+    <string name="youtube_sign_in_google">Sign in with Google</string>
+    <string name="youtube_signed_in">Signed in</string>
+    <string name="youtube_radio_explainer">Radio keeps playing songs that sound like the one you start.</string>
+    <string name="youtube_back">Back</string>
 
     <!-- SoundCloud -->
     <string name="soundcloud_tab_title">SoundCloud</string>

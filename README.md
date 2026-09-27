@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>A beautiful music player for Android</strong><br>
-  Local library, lyrics, playlists — plus SoundCloud streaming &amp; downloads
+  <strong>A YouTube Music player for Android</strong><br>
+  Feed, radio, playlists, and likes — with background playback
 </p>
 
 <p align="center">
@@ -33,81 +33,65 @@
    - **`…-armeabi-v7a.apk`** — older 32-bit devices
 3. On your phone, open the downloaded file and install.
    - If Android blocks it, allow **Install unknown apps** for your browser / Files app.
-4. Open PixelPlayer and grant **music / files** access when asked so your local library can load.
+4. Open PixelPlayer. Playback continues in the background with the notification controls.
 
 > Tip: each new release can update the app **in place** (same signing key). You usually don’t need to uninstall first — that keeps login and settings.
 
 ---
 
-## SoundCloud setup
+## YouTube Music
 
-SoundCloud in PixelPlayer needs a **web `client_id`** (from SoundCloud’s website). Signing in alone is not enough for streaming.
+PixelPlayer plays YouTube audio through the existing player. It does not scan a local music library.
 
-### 1. Open SoundCloud settings in the app
+| Tab | What it does |
+|-----|----------------|
+| **Feed** | Your Mix, artwork collage, trending songs, radio starters, and playlists |
+| **Radio** | Starts a song, then keeps queuing similar tracks |
+| **Search** | Songs, albums, and playlists |
+| **Playlists** | Today's hits, workout, focus, and party |
+| **Liked** | Songs you like on device, plus liked videos from your Google account after sign-in |
 
-1. On **Home**, tap the **cloud** icon and choose **SoundCloud**. The gear on the **SoundCloud** tab opens the same page.
-2. You’ll see fields for **client_id**, optional username, and **Sign in**. The SoundCloud tab itself stays in the bottom bar.
+### Sign in with Google
 
-### 2. Get a `client_id` from your browser
+Liked videos and the “channels you follow” shelf need the Google account you use on YouTube.
 
-Do this on a computer (Chrome / Edge / Firefox):
+1. On **Feed**, tap the **account** icon in the colored header (Beta, account, changelog, settings).
+2. Tap **Sign in with Google**.
+3. Sign in inside the app, then tap **Done**.
+4. Open **Liked** to load that account’s liked videos.
 
-1. Open [https://soundcloud.com](https://soundcloud.com) and play any track (signed in or not).
-2. Press **F12** (or right‑click → **Inspect**) to open Developer Tools.
-3. Open the **Network** tab.
-4. In the filter box, type: `client_id`
-5. Click around or pause/play so new requests appear.
-6. Click a request to SoundCloud’s API — for example:
-   `https://api-v2.soundcloud.com/me?client_id=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
-7. Copy the long value after `client_id=` (a string of letters and numbers).  
-   Yours will look similar but different, and it can change over time.
+**Sign out** is on the same Account screen. The heart on a song still saves a like on the device if you are signed out.
 
-<p align="center">
-  <img src="assets/soundcloud-devtools-request.png" alt="Chrome DevTools Network tab showing api-v2.soundcloud.com/me?client_id=…" width="720"/>
-</p>
+The header also opens the **changelog** and app **settings**.
 
-<p align="center"><em>Network → filter <code>client_id</code> → open a request → copy <code>client_id</code> from the Request URL</em></p>
+---
 
-### 3. Paste it into PixelPlayer
+## SoundCloud
 
-1. Back in **SoundCloud settings**, paste the value into **Web client_id**.
-2. Tap **Save SoundCloud settings**.
-3. (Recommended) Tap **Sign in to SoundCloud**, log in in the browser window, then confirm you’re signed in.
-4. Return to the SoundCloud tab — Feed / Likes / playlists should load after a moment.
-
-### If something fails
-
-| Message / symptom | What to try |
-|-------------------|-------------|
-| “Set client_id in Settings…” | Paste a fresh `client_id` from the steps above and Save. |
-| “Rate limited” / API 429 | Wait a minute, then try again. Don’t spam refresh. |
-| “No playable stream” | Track may be DRM-only, or `client_id` expired — grab a new one. |
-| Empty Feed while signed in | Sign out/in again; confirm Save after pasting `client_id`. |
-
-> `client_id` can expire when SoundCloud updates their site. If streaming suddenly stops, repeat step 2 and Save again.
+SoundCloud is not a bottom-bar tab in this build. The previous web `client_id` and sign-in flow is described in [docs/soundcloud-implementation.md](docs/soundcloud-implementation.md).
 
 ---
 
 ## Everyday use (quick)
 
-- **Library** — your local music (songs, albums, artists, playlists, folders).
-- **SoundCloud** — Feed, Discover, Likes, Tracks, Playlists, Downloads; search or paste a SoundCloud URL.
-- **Downloads** — long-press to multi-select (play, queue, next, playlist, delete, share ZIP).
-- Share a track/playlist from SoundCloud with the **share** icon — sends the **web link**.
+- **Feed** shuffle plays Your Mix and keeps playing in the background.
+- **Radio** is a continuous mix based on the song you start, not a live broadcast.
+- **Liked** and the heart icon keep songs you like. Sign in to also load YouTube liked videos.
+- **Playlists** opens a collection; tap a track to play it.
 
 ---
 
 ## Requirements
 
-- Android **11** or newer  
-- Storage / music permission for local files  
-- Internet for SoundCloud
+- Android **11** or newer
+- Internet for YouTube Music
+- Notification permission so background playback can show controls
 
 ---
 
 ## Support & credits
 
-This build is maintained at **[kibetmasi/PixelPlayer](https://github.com/kibetmasi/PixelPlayer)** (SoundCloud-focused fork).
+This build is maintained at **[kibetmasi/PixelPlayer](https://github.com/kibetmasi/PixelPlayer)**. A push to `master` publishes a signed release APK on the Releases page.
 
 Upstream project by [theovilardo](https://github.com/theovilardo/PixelPlayer). Logo by [Aureal](https://github.com/NPSummers).
 

@@ -127,6 +127,9 @@ internal fun BoxScope.UnifiedPlayerMiniAndFullLayers(
                     val soundCloudPrefs = hiltViewModel<SoundCloudPrefsViewModel>()
                     val likedPermalinks by soundCloudPrefs.likedPermalinks.collectAsStateWithLifecycle()
                     val soundCloudPermalink = soundCloudPrefs.permalinkFor(currentSongNonNull.id)
+                    val youtubeSavedIds by playerViewModel.youtubeSavedSongIds.collectAsStateWithLifecycle()
+                    val youtubeLiked by playerViewModel.isCurrentSongFavorite.collectAsStateWithLifecycle()
+                    val isYoutubeSong = currentSongNonNull.id.startsWith("yt_")
                     val context = LocalContext.current
                     val likeScope = rememberCoroutineScope()
                     MiniPlayerContentInternal(
@@ -137,18 +140,30 @@ internal fun BoxScope.UnifiedPlayerMiniAndFullLayers(
                         onPlayPause = { playerViewModel.playPause() },
                         onPrevious = { playerViewModel.previousSong() },
                         onNext = { playerViewModel.nextSong() },
-                        soundCloudLiked = soundCloudPermalink != null && soundCloudPermalink in likedPermalinks,
-                        onSoundCloudLike = if (soundCloudPermalink == null) {
-                            null
+                        soundCloudLiked = if (isYoutubeSong) {
+                            youtubeLiked
                         } else {
-                            {
-                                likeScope.launch {
-                                    val error = soundCloudPrefs.toggleSoundCloudLike(currentSongNonNull.id)
-                                    if (!error.isNullOrBlank()) {
-                                        Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                            soundCloudPermalink != null && soundCloudPermalink in likedPermalinks
+                        },
+                        onSoundCloudLike = when {
+                            isYoutubeSong -> ({ playerViewModel.toggleFavorite() })
+                            soundCloudPermalink == null -> null
+                            else -> {
+                                {
+                                    likeScope.launch {
+                                        val error = soundCloudPrefs.toggleSoundCloudLike(currentSongNonNull.id)
+                                        if (!error.isNullOrBlank()) {
+                                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
                             }
+                        },
+                        youtubeSaved = currentSongNonNull.id in youtubeSavedIds,
+                        onYoutubeSave = if (isYoutubeSong) {
+                            { playerViewModel.toggleYoutubeSave() }
+                        } else {
+                            null
                         },
                         canScroll = isMiniPlayerVisible && infrequentPlayerState.isPlaying,
                         modifier = Modifier.fillMaxSize()

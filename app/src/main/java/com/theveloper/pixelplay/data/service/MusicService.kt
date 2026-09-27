@@ -174,6 +174,8 @@ class MusicService : MediaLibraryService() {
     @Inject
     lateinit var soundCloudClient: SoundCloudClient
     @Inject
+    lateinit var youtubeClient: com.theveloper.pixelplay.youtube.YoutubeClient
+    @Inject
     @AppScope
     lateinit var appScope: CoroutineScope
 
@@ -206,6 +208,7 @@ class MusicService : MediaLibraryService() {
     private var countedPlayListener: Player.Listener? = null
     private var consecutivePlaybackErrorSkips = 0
     private val soundCloudRefreshAttempted = mutableSetOf<String>()
+    private val youtubeRefreshAttempted = mutableSetOf<String>()
     private val alarmManager by lazy {
         getSystemService(Context.ALARM_SERVICE) as AlarmManager
     }
@@ -1348,7 +1351,10 @@ class MusicService : MediaLibraryService() {
             if (playbackState == Player.STATE_READY) {
                 consecutivePlaybackErrorSkips = 0
                 (mediaSession?.player ?: engine.masterPlayer).currentMediaItem?.mediaId
-                    ?.let { soundCloudRefreshAttempted.remove(it) }
+                    ?.let {
+                        soundCloudRefreshAttempted.remove(it)
+                        youtubeRefreshAttempted.remove(it)
+                    }
             }
             if (playbackState == Player.STATE_ENDED) {
                 listeningStatsTracker.finalizeCurrentSession()
@@ -1499,6 +1505,25 @@ class MusicService : MediaLibraryService() {
             if (currentItem != null && !permalink.isNullOrBlank() && soundCloudRefreshAttempted.add(mediaId)) {
                 serviceScope.launch {
                     val refreshed = refreshSoundCloudItem(currentItem, permalink)
+                    withContext(Dispatchers.Main.immediate) {
+                        val sameTrack = player.currentMediaItem?.mediaId == mediaId
+                        val oldUri = currentItem.localConfiguration?.uri
+                        val newUri = refreshed.localConfiguration?.uri
+                        if (sameTrack && newUri != null && newUri != oldUri) {
+                            player.replaceMediaItem(player.currentMediaItemIndex, refreshed)
+                            player.prepare()
+                            player.play()
+                        } else {
+                            skipUnplayableItem(player, error)
+                        }
+                    }
+                }
+                return
+            }
+            val watchUrl = youtubeWatchUrl(currentItem)
+            if (currentItem != null && !watchUrl.isNullOrBlank() && youtubeRefreshAttempted.add(mediaId)) {
+                serviceScope.launch {
+                    val refreshed = refreshYoutubeItem(currentItem, watchUrl)
                     withContext(Dispatchers.Main.immediate) {
                         val sameTrack = player.currentMediaItem?.mediaId == mediaId
                         val oldUri = currentItem.localConfiguration?.uri
@@ -1741,6 +1766,8 @@ class MusicService : MediaLibraryService() {
                     durationMs = durationMs,
                     soundCloudPermalink = metadata.extras?.getString(SoundCloudClient.EXTRA_PERMALINK)
                         ?: SoundCloudClient.permalinkForSongId(mediaItem.mediaId),
+                    youtubeWatchUrl = metadata.extras?.getString(com.theveloper.pixelplay.youtube.YoutubeClient.EXTRA_WATCH_URL)
+                        ?: com.theveloper.pixelplay.youtube.YoutubeClient.watchUrlForSongId(mediaItem.mediaId),
                 )
             )
         }
@@ -1812,7 +1839,7 @@ class MusicService : MediaLibraryService() {
             else -> 0
         }
 
-        val preparedItems = refreshSoundCloudQueue(restoredItems).toMutableList()
+        val preparedItems = refreshYoutubeQueue(refreshSoundCloudQueue(restoredItems)).toMutableList()
         preparedItems.getOrNull(resolvedIndex)?.let { currentItem ->
             val resolvedCurrentItem = runCatching { engine.resolveMediaItem(currentItem) }.getOrNull()
             if (resolvedCurrentItem != null && resolvedCurrentItem != currentItem) {
@@ -1896,6 +1923,10 @@ class MusicService : MediaLibraryService() {
                 putString(SoundCloudClient.EXTRA_PERMALINK, permalink)
                 SoundCloudClient.rememberPermalink(snapshotItem.mediaId, permalink)
             }
+            snapshotItem.youtubeWatchUrl?.takeIf { it.isNotBlank() }?.let { watchUrl ->
+                putString(com.theveloper.pixelplay.youtube.YoutubeClient.EXTRA_WATCH_URL, watchUrl)
+                com.theveloper.pixelplay.youtube.YoutubeClient.rememberWatchUrl(snapshotItem.mediaId, watchUrl)
+            }
         }
         metadataBuilder.setExtras(extras)
 
@@ -1905,6 +1936,7 @@ class MusicService : MediaLibraryService() {
             .setMediaMetadata(metadataBuilder.build())
             .build()
             .let(MediaItemBuilder::withSoundCloudPermalink)
+            .let(MediaItemBuilder::withYoutubeWatchUrl)
     }
 
     private fun soundCloudPermalink(item: MediaItem?): String? {
@@ -1913,6 +1945,29 @@ class MusicService : MediaLibraryService() {
         return item.mediaMetadata.extras?.getString(SoundCloudClient.EXTRA_PERMALINK)
             ?: SoundCloudClient.permalinkForSongId(item.mediaId)
     }
+
+    private fun youtubeWatchUrl(item: MediaItem?): String? {
+        if (item == null) return null
+        return item.mediaMetadata.extras?.getString(com.theveloper.pixelplay.youtube.YoutubeClient.EXTRA_WATCH_URL)
+            ?: com.theveloper.pixelplay.youtube.YoutubeClient.watchUrlForSongId(item.mediaId)
+    }
+
+    private suspend fun refreshYoutubeQueue(items: List<MediaItem>): List<MediaItem> = coroutineScope {
+        items.map { item ->
+            async(Dispatchers.IO) {
+                val watchUrl = youtubeWatchUrl(item) ?: return@async item
+                refreshYoutubeItem(item, watchUrl)
+            }
+        }.awaitAll()
+    }
+
+    private suspend fun refreshYoutubeItem(item: MediaItem, watchUrl: String): MediaItem =
+        withContext(Dispatchers.IO) {
+            val streamUrl = runCatching { youtubeClient.resolveTrack(watchUrl).streamUrl }.getOrNull()
+            if (streamUrl.isNullOrBlank()) return@withContext item
+            val refreshed = item.buildUpon().setUri(streamUrl).build()
+            MediaItemBuilder.withYoutubeWatchUrl(refreshed)
+        }
 
     private suspend fun refreshSoundCloudQueue(items: List<MediaItem>): List<MediaItem> = coroutineScope {
         items.map { item ->

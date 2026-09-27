@@ -2,7 +2,6 @@ package com.theveloper.pixelplay.soundcloud
 
 import com.theveloper.pixelplay.data.model.Song
 import org.schabi.newpipe.extractor.InfoItem
-import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.channel.tabs.ChannelTabInfo
 import org.schabi.newpipe.extractor.channel.tabs.ChannelTabs
@@ -17,7 +16,6 @@ import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -47,10 +45,6 @@ class SoundCloudClient @Inject constructor(
         val track: SoundCloudResolvedTrack,
         val cachedAtMs: Long,
     )
-
-    init {
-        ensureInitialized(downloader)
-    }
 
     fun setClientIdOverride(clientId: String?) {
         val trimmed = clientId?.trim().orEmpty()
@@ -478,7 +472,6 @@ class SoundCloudClient @Inject constructor(
     companion object {
         const val EXTRA_PERMALINK = "com.theveloper.pixelplay.soundcloud.PERMALINK"
         private val permalinkBySongId = ConcurrentHashMap<String, String>()
-        private val initialized = AtomicBoolean(false)
         private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
 
         fun rememberPermalink(songId: String, permalink: String) {
@@ -491,12 +484,5 @@ class SoundCloudClient @Inject constructor(
 
         fun songIdForUrl(url: String): String =
             "sc_${url.trim().hashCode().toUInt()}"
-
-        private fun ensureInitialized(downloader: SoundCloudDownloader) {
-            if (initialized.compareAndSet(false, true)) {
-                NewPipe.init(downloader)
-                Timber.i("SoundCloud: NewPipe Extractor initialized")
-            }
-        }
     }
 }

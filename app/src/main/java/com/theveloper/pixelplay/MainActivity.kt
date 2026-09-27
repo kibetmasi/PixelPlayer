@@ -267,14 +267,14 @@ class MainActivity : ComponentActivity() {
             
             // Permissions Logic
             val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                listOf(Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+                listOf(Manifest.permission.POST_NOTIFICATIONS)
             } else {
-                listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                emptyList()
             }
             @OptIn(ExperimentalPermissionsApi::class)
             val permissionState = rememberMultiplePermissionsState(permissions = permissions)
             // Determine if we need to show Setup based on completion OR missing permissions
-            val permissionsValid = permissionState.allPermissionsGranted
+            val permissionsValid = permissions.isEmpty() || permissionState.allPermissionsGranted
             val showSetupScreen = remember(isSetupComplete, permissionsValid, isBenchmarkMode) {
                 when {
                     isBenchmarkMode -> false
@@ -286,8 +286,7 @@ class MainActivity : ComponentActivity() {
             // Sync Trigger: When we are NOT showing setup (meaning permissions are good and setup is done)
             LaunchedEffect(showSetupScreen) {
                 if (showSetupScreen == false) {
-                     LogUtils.i(this, "Setup complete/skipped and permissions valid. Starting sync.")
-                     mainViewModel.startSync()
+                     LogUtils.i(this, "Setup complete. Local library sync is disabled.")
                 }
             }
 
@@ -654,10 +653,11 @@ class MainActivity : ComponentActivity() {
 
         val commonNavItems = remember {
             persistentListOf(
-                BottomNavItem("Home", R.string.nav_bar_home, R.drawable.rounded_home_24, R.drawable.home_24_rounded_filled, Screen.Home),
+                BottomNavItem("Feed", R.string.nav_bar_feed, R.drawable.rounded_home_24, R.drawable.home_24_rounded_filled, Screen.Home),
+                BottomNavItem("Radio", R.string.nav_bar_radio, R.drawable.rounded_instant_mix_24, null, Screen.Radio),
                 BottomNavItem("Search", R.string.nav_bar_search, R.drawable.rounded_search_24, R.drawable.rounded_search_24, Screen.Search),
-                BottomNavItem("Library", R.string.nav_bar_library, R.drawable.rounded_library_music_24, R.drawable.round_library_music_24, Screen.Library),
-                BottomNavItem("SoundCloud", R.string.nav_bar_soundcloud, R.drawable.ic_soundcloud_24, R.drawable.ic_soundcloud_filled_24, Screen.SoundCloud),
+                BottomNavItem("Playlists", R.string.nav_bar_playlists, R.drawable.rounded_playlist_play_24, null, Screen.Playlists),
+                BottomNavItem("Liked", R.string.nav_bar_liked, R.drawable.rounded_favorite_24, R.drawable.round_favorite_24, Screen.Liked),
             )
         }
         val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -682,6 +682,7 @@ class MainActivity : ComponentActivity() {
                 Screen.EditTransition.route,
                 Screen.Experimental.route,
                 Screen.SoundCloudSettings.route,
+                Screen.YoutubeSettings.route,
                 Screen.ArtistSettings.route,
                 Screen.Equalizer.route,
                 Screen.SettingsCategory.route,

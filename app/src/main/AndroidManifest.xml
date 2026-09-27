@@ -122,6 +122,13 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
+            android:name=".presentation.youtube.auth.YoutubeLoginActivity"
+            android:exported="false"
+            android:label="YouTube Login"
+            android:theme="@style/Theme.PixelPlay"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".presentation.soundcloud.auth.SoundCloudLoginActivity"
             android:exported="false"
             android:label="SoundCloud Login"

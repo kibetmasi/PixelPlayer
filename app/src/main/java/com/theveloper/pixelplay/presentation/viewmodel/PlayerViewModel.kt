@@ -216,7 +216,8 @@ class PlayerViewModel @Inject constructor(
     private val playbackDispatchStateHolder: PlaybackDispatchStateHolder,
     private val mediaControllerSyncStateHolder: MediaControllerSyncStateHolder,
     private val sessionToken: SessionToken,
-    private val mediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory
+    private val mediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory,
+    private val youtubeMusicStore: com.theveloper.pixelplay.youtube.YoutubeMusicStore,
 ) : ViewModel() {
 
     private val _playerUiState = MutableStateFlow(PlayerUiState())
@@ -1200,6 +1201,8 @@ class PlayerViewModel @Inject constructor(
         .getFavoriteSongIdsFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
+    val youtubeSavedSongIds: StateFlow<Set<String>> = youtubeMusicStore.savedSongIds
+
     val isCurrentSongFavorite: StateFlow<Boolean> = combine(
         stablePlayerState
             .map { it.currentSong }
@@ -1213,9 +1216,15 @@ class PlayerViewModel @Inject constructor(
                     emit(resolveFavoriteSongId(song))
                 }
             },
-        favoriteSongIds
-    ) { favoriteSongId, ids ->
-        favoriteSongId?.let { ids.contains(it) } ?: false
+        favoriteSongIds,
+        youtubeMusicStore.likedSongIds,
+        stablePlayerState.map { it.currentSong?.id }.distinctUntilChanged(),
+    ) { favoriteSongId, ids, youtubeLikedIds, currentSongId ->
+        if (currentSongId?.startsWith("yt_") == true) {
+            currentSongId in youtubeLikedIds
+        } else {
+            favoriteSongId?.let { ids.contains(it) } ?: false
+        }
     }.distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -2261,10 +2270,21 @@ class PlayerViewModel @Inject constructor(
 
     fun toggleFavorite() {
         val currentSong = playbackStateHolder.stablePlayerState.value.currentSong ?: return
+        if (currentSong.id.startsWith("yt_")) {
+            youtubeMusicStore.toggleLike(currentSong)
+            return
+        }
         viewModelScope.launch {
             val favoriteSongId = resolveFavoriteSongId(currentSong) ?: return@launch
             val currentlyFavorite = favoriteSongIds.value.contains(favoriteSongId)
             setFavoriteStatusEverywhere(favoriteSongId, !currentlyFavorite)
+        }
+    }
+
+    fun toggleYoutubeSave() {
+        val currentSong = playbackStateHolder.stablePlayerState.value.currentSong ?: return
+        if (currentSong.id.startsWith("yt_")) {
+            youtubeMusicStore.toggleSave(currentSong)
         }
     }
 
