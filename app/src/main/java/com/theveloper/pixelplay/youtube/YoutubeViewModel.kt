@@ -96,7 +96,13 @@ class YoutubeViewModel @Inject constructor(
             }
             YoutubeSection.LIKED -> {
                 if (client.likedHits.isNotEmpty()) {
-                    _uiState.update { it.copy(results = client.likedHits, isLoading = false) }
+                    _uiState.update {
+                        it.copy(
+                            results = client.likedHits,
+                            isLoading = false,
+                            hasMore = likedContinuation != null,
+                        )
+                    }
                 }
                 loadLiked(refreshing = client.likedHits.isNotEmpty())
             }
@@ -296,8 +302,10 @@ class YoutubeViewModel @Inject constructor(
             remote.fold(
                 onSuccess = { page ->
                     if (session.generation() != epoch) return@launch
+                    // Keep YouTube Music's newest-first order. Local likes only fill in
+                    // when the account list is empty so they cannot jump the queue.
                     val account = if (session.isSignedIn()) page.hits else emptyList()
-                    val merged = (account + local).distinctBy { it.url }
+                    val rows = account.ifEmpty { local }
                     client.likedHits = account
                     likedContinuation = page.continuation
                     _uiState.update {
@@ -305,7 +313,7 @@ class YoutubeViewModel @Inject constructor(
                             isLoading = false,
                             isRefreshing = false,
                             error = null,
-                            results = merged,
+                            results = rows,
                             hasMore = page.continuation != null,
                         )
                     }
@@ -353,13 +361,16 @@ class YoutubeViewModel @Inject constructor(
             if (session.generation() != epoch) return@launch
             page.fold(
                 onSuccess = { loaded ->
-                    likedContinuation = loaded.continuation
-                    client.likedHits = (client.likedHits + loaded.hits).distinctBy { it.url }
+                    val appended = loaded.hits.filter { hit ->
+                        client.likedHits.none { existing -> existing.url == hit.url }
+                    }
+                    likedContinuation = loaded.continuation.takeIf { appended.isNotEmpty() }
+                    client.likedHits = client.likedHits + appended
                     _uiState.update {
                         it.copy(
                             isLoadingMore = false,
-                            hasMore = loaded.continuation != null,
-                            results = (it.results + loaded.hits).distinctBy { hit -> hit.url },
+                            hasMore = likedContinuation != null,
+                            results = (it.results + appended).distinctBy { hit -> hit.url },
                         )
                     }
                 },

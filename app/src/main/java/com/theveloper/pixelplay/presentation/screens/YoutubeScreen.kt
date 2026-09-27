@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -69,6 +70,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -113,6 +115,7 @@ import com.theveloper.pixelplay.youtube.YoutubeSearchFilter
 import com.theveloper.pixelplay.youtube.YoutubeSection
 import com.theveloper.pixelplay.youtube.YoutubeViewModel
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -170,10 +173,17 @@ fun YoutubeScreen(
         YoutubeSection.RADIO -> stringResource(R.string.youtube_radio_title)
     }
     val rows = when (browseSection) {
-        YoutubeSection.LIKED -> (uiState.results + liked).distinctBy { it.url }
+        // Signed-in likes stay in YouTube Music order (newest first). Local likes
+        // only appear when there is no account list, so they cannot bury new likes.
+        YoutubeSection.LIKED -> if (account.isSignedIn && uiState.results.isNotEmpty()) {
+            uiState.results
+        } else {
+            uiState.results.ifEmpty { liked }
+        }
         YoutubeSection.SAVED -> saved
         else -> uiState.results
     }
+    val listState = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
 
     LaunchedEffect(section) {
@@ -197,6 +207,18 @@ fun YoutubeScreen(
     }
     LaunchedEffect(warmUpKey) {
         if (warmUpCandidates.isNotEmpty()) viewModel.warmUpTracks(warmUpCandidates)
+    }
+    LaunchedEffect(browseSection, listState) {
+        if (browseSection != YoutubeSection.LIKED) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible to info.totalItemsCount
+        }.distinctUntilChanged().collect { (lastVisible, total) ->
+            if (total > 0 && lastVisible >= total - LOAD_MORE_THRESHOLD) {
+                viewModel.loadMoreLiked()
+            }
+        }
     }
 
     if (uiState.collectionTitle != null) {
@@ -483,7 +505,11 @@ fun YoutubeScreen(
                         }
                     }
                     else -> {
-                        LazyColumn(contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = contentPadding,
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
                             if (browseSection == YoutubeSection.RADIO) {
                                 item(key = "radio_explainer") {
                                     Text(
@@ -494,10 +520,7 @@ fun YoutubeScreen(
                                     )
                                 }
                             }
-                            itemsIndexed(rows, key = { _, hit -> hit.url }) { index, hit ->
-                                if (uiState.hasMore && index >= rows.size - LOAD_MORE_THRESHOLD) {
-                                    LaunchedEffect(rows.size) { viewModel.loadMoreLiked() }
-                                }
+                            itemsIndexed(rows, key = { _, hit -> hit.url }) { _, hit ->
                                 val song = remember(hit) { placeholderSong(hit) }
                                 YoutubeTrackRow(
                                     song = song,

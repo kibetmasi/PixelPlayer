@@ -94,6 +94,7 @@ class YoutubeClient @Inject constructor(
         var loggedIn: Boolean? = null
         var requests = 0
         do {
+            val before = hits.size
             val root = musicBrowse(
                 browseId = if (token.isNullOrBlank()) LIKED_MUSIC_BROWSE_ID else null,
                 continuation = token,
@@ -102,6 +103,11 @@ class YoutubeClient @Inject constructor(
             collectLikedShelf(root, hits, Int.MAX_VALUE)
             token = findPlaylistContinuation(root)
             requests++
+            // Empty continuation pages mean we reached the end of Liked Music.
+            if (hits.size == before) {
+                token = null
+                break
+            }
         } while (!token.isNullOrBlank() && hits.size < pageSize && requests < MAX_REQUESTS_PER_PAGE)
         if (hits.isEmpty() && continuation.isNullOrBlank()) {
             throw IllegalStateException(
@@ -483,30 +489,16 @@ class YoutubeClient @Inject constructor(
     }
 
     private fun collectLikedShelf(root: JSONObject, hits: MutableSet<YoutubeHit>, limit: Int) {
-        val rows = root.optJSONObject("contents")
-            ?.optJSONObject("twoColumnBrowseResultsRenderer")
-            ?.optJSONObject("secondaryContents")
-            ?.optJSONObject("sectionListRenderer")
-            ?.optJSONArray("contents")
-            ?.let { contents ->
-                (0 until contents.length()).firstNotNullOfOrNull { index ->
-                    contents.optJSONObject(index)
-                        ?.optJSONObject("musicPlaylistShelfRenderer")
-                        ?.optJSONArray("contents")
-                }
-            }
-            ?: root.optJSONObject("continuationContents")
-                ?.optJSONObject("musicPlaylistShelfContinuation")
-                ?.optJSONArray("contents")
+        val rows = findLikedRows(root)
         if (rows == null) {
             collectVideoHits(root, hits, limit)
             return
         }
         for (index in 0 until rows.length()) {
             if (hits.size >= limit) return
-            val renderer = rows.optJSONObject(index)
-                ?.optJSONObject("musicResponsiveListItemRenderer")
-                ?: continue
+            val item = rows.optJSONObject(index) ?: continue
+            if (item.optJSONObject("continuationItemRenderer") != null) continue
+            val renderer = item.optJSONObject("musicResponsiveListItemRenderer") ?: continue
             val videoId = renderer.optJSONObject("playlistItemData")?.optString("videoId").orEmpty()
             val title = flexColumnText(renderer, 0)
             if (videoId.length != 11 || title.isBlank()) continue
@@ -519,6 +511,41 @@ class YoutubeClient @Inject constructor(
                 kind = YoutubeHit.Kind.TRACK,
             )
         }
+    }
+
+    /** Desktop two-column Liked Music, mobile single-column, or a continuation page. */
+    private fun findLikedRows(root: JSONObject): JSONArray? {
+        root.optJSONObject("contents")
+            ?.optJSONObject("twoColumnBrowseResultsRenderer")
+            ?.optJSONObject("secondaryContents")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.let { contents -> firstShelfContents(contents) }
+            ?.let { return it }
+
+        root.optJSONObject("contents")
+            ?.optJSONObject("singleColumnBrowseResultsRenderer")
+            ?.optJSONArray("tabs")
+            ?.optJSONObject(0)
+            ?.optJSONObject("tabRenderer")
+            ?.optJSONObject("content")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.let { contents -> firstShelfContents(contents) }
+            ?.let { return it }
+
+        val continuation = root.optJSONObject("continuationContents") ?: return null
+        return continuation.optJSONObject("musicPlaylistShelfContinuation")?.optJSONArray("contents")
+            ?: continuation.optJSONObject("musicShelfContinuation")?.optJSONArray("contents")
+    }
+
+    private fun firstShelfContents(sections: JSONArray): JSONArray? {
+        for (index in 0 until sections.length()) {
+            val section = sections.optJSONObject(index) ?: continue
+            section.optJSONObject("musicPlaylistShelfRenderer")?.optJSONArray("contents")?.let { return it }
+            section.optJSONObject("musicShelfRenderer")?.optJSONArray("contents")?.let { return it }
+        }
+        return null
     }
 
     private fun musicVisitorId(): String {
@@ -751,13 +778,25 @@ class YoutubeClient @Inject constructor(
 
     private fun findPlaylistContinuation(node: JSONObject): String? {
         val shelf = findNamedObject(node, "musicPlaylistShelfRenderer")
+            ?: findNamedObject(node, "musicPlaylistShelfContinuation")
             ?: findNamedObject(node, "musicShelfRenderer")
-            ?: findNamedObject(node, "playlistPanelRenderer")
+            ?: findNamedObject(node, "musicShelfContinuation")
         if (shelf != null) {
             findContinuation(shelf.opt("continuations"))?.let { return it }
-            findContinuation(shelf.opt("contents"))?.let { return it }
+            tokenFromContinuationItems(shelf.optJSONArray("contents"))?.let { return it }
         }
-        return findContinuation(node)
+        return null
+    }
+
+    /** Next-page tokens sit on continuationItemRenderer, usually the last row of the shelf. */
+    private fun tokenFromContinuationItems(contents: JSONArray?): String? {
+        if (contents == null) return null
+        for (index in contents.length() - 1 downTo 0) {
+            val renderer = contents.optJSONObject(index)?.optJSONObject("continuationItemRenderer")
+                ?: continue
+            findContinuation(renderer)?.let { return it }
+        }
+        return null
     }
 
     private fun findNamedObject(node: Any?, name: String): JSONObject? {
@@ -884,10 +923,9 @@ class YoutubeClient @Inject constructor(
         private const val MUSIC_CLIENT_VERSION = "1.20260804.16.00"
         private const val INNER_TUNE_VISITOR = "CgtsZG1ySnZiQWtSbyiMjuGSBg=="
         private const val LIKED_MUSIC_BROWSE_ID = "VLLM"
-        const val LIKED_PAGE_SIZE = 100
-        // A continuation can come back with only a handful of rows, so allow a few
-        // round trips per page instead of showing the user a nearly empty page.
-        private const val MAX_REQUESTS_PER_PAGE = 3
+        // One InnerTube response per scroll page so older likes arrive as you go down.
+        const val LIKED_PAGE_SIZE = 40
+        private const val MAX_REQUESTS_PER_PAGE = 1
         private val VISITOR_REGEX = Regex("^Cg[ts]")
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {
