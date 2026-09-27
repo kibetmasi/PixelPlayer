@@ -115,11 +115,22 @@ private fun YoutubeWebLoginScreen(
                 )
             }
             Box(Modifier.fillMaxSize()) {
+                var openedLikedMusic by remember { mutableStateOf(false) }
                 YoutubeWebView(
                     onProgress = { progress = it },
                     onWebViewCreated = { webView = it },
-                    onCookiesMaybeReady = {
+                    onCookiesMaybeReady = { url ->
                         val cookies = extractYoutubeSession() ?: return@YoutubeWebView
+                        val hasAuth = cookies.contains("SAPISID=") || cookies.contains("__Secure-3PAPISID=")
+                        if (!hasAuth) return@YoutubeWebView
+                        val onMusic = url.orEmpty().contains("music.youtube.com")
+                        if (!onMusic) {
+                            if (!openedLikedMusic) {
+                                openedLikedMusic = true
+                                webView?.loadUrl("https://music.youtube.com/playlist?list=LM")
+                            }
+                            return@YoutubeWebView
+                        }
                         if (viewModel.importSession(cookies)) onClose()
                     },
                 )
@@ -133,7 +144,7 @@ private fun YoutubeWebLoginScreen(
 private fun YoutubeWebView(
     onProgress: (Int) -> Unit,
     onWebViewCreated: (WebView) -> Unit,
-    onCookiesMaybeReady: () -> Unit,
+    onCookiesMaybeReady: (String?) -> Unit,
 ) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -151,7 +162,7 @@ private fun YoutubeWebView(
                 }
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        onCookiesMaybeReady()
+                        onCookiesMaybeReady(url)
                     }
                 }
                 loadUrl(YoutubeLoginActivity.TARGET_URL)

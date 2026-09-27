@@ -61,12 +61,13 @@ internal class YoutubeDownloader : Downloader() {
         origin: String = "https://www.youtube.com",
         clientName: String? = null,
         clientVersion: String? = null,
+        userAgent: String = USER_AGENT,
     ): String {
         val cookies = cookieHeader?.trim().orEmpty()
         val request = okhttp3.Request.Builder()
             .url(url)
             .post(json.toRequestBody(JSON))
-            .header("User-Agent", USER_AGENT)
+            .header("User-Agent", userAgent)
             .header("Content-Type", "application/json")
             .header("Origin", origin)
             .header("Referer", "$origin/")
@@ -76,6 +77,7 @@ internal class YoutubeDownloader : Downloader() {
                 if (!clientName.isNullOrBlank()) header("X-YouTube-Client-Name", clientName)
                 if (!clientVersion.isNullOrBlank()) header("X-YouTube-Client-Version", clientVersion)
                 if (cookies.isNotEmpty()) {
+                    header("X-YouTube-Bootstrap-Logged-In", "true")
                     header("Cookie", cookies)
                     authorization(cookies, origin)?.let { header("Authorization", it) }
                 }

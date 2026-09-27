@@ -83,67 +83,75 @@ class YoutubeClient @Inject constructor(
         applySession()
         if (!session.isSignedIn()) return emptyList()
         val hits = linkedSetOf<YoutubeHit>()
-        browseLibrary(
-            host = "https://music.youtube.com",
-            browseId = "FEmusic_liked_videos",
-            clientName = "WEB_REMIX",
-            clientVersion = "1.20250922.01.00",
-            clientHeader = "67",
-            hits = hits,
-            limit = limit,
-        )
-        if (hits.isEmpty()) {
-            browseLibrary(
-                host = "https://music.youtube.com",
-                browseId = "VLLM",
-                clientName = "WEB_REMIX",
-                clientVersion = "1.20250922.01.00",
-                clientHeader = "67",
+        runCatching {
+            queueLibrary(
+                endpoint = "next",
+                bodySeed = """"playlistId":"LM","isAudioOnly":true""",
                 hits = hits,
                 limit = limit,
             )
         }
         if (hits.isEmpty()) {
             browseLibrary(
-                host = "https://www.youtube.com",
-                browseId = "VLLl",
-                clientName = "WEB",
-                clientVersion = "2.20250301.01.00",
-                clientHeader = "1",
+                browseId = "FEmusic_liked_videos",
                 hits = hits,
                 limit = limit,
             )
+        }
+        if (hits.isEmpty()) {
+            browseLibrary(
+                browseId = "VLLM",
+                hits = hits,
+                limit = limit,
+            )
+        }
+        if (hits.isEmpty()) {
+            throw IllegalStateException("Couldn't load Liked Music. Sign in again from Account.")
         }
         return hits.take(limit).toList()
     }
 
     private fun browseLibrary(
-        host: String,
         browseId: String,
-        clientName: String,
-        clientVersion: String,
-        clientHeader: String,
         hits: MutableSet<YoutubeHit>,
         limit: Int,
     ) {
+        runCatching {
+            queueLibrary(
+                endpoint = "browse",
+                bodySeed = """"browseId":"$browseId"""",
+                hits = hits,
+                limit = limit,
+            )
+        }
+    }
+
+    private fun queueLibrary(
+        endpoint: String,
+        bodySeed: String,
+        hits: MutableSet<YoutubeHit>,
+        limit: Int,
+    ) {
+        val version = "1.20250922.01.00"
         val context = """
-            {"client":{"clientName":"$clientName","clientVersion":"$clientVersion","hl":"en","gl":"US"}}
+            {"client":{"clientName":"WEB_REMIX","clientVersion":"$version","hl":"en","gl":"US","platform":"DESKTOP","originalUrl":"https://music.youtube.com/playlist?list=LM"}}
         """.trim()
-        var body = """{"context":$context,"browseId":"$browseId"}"""
-        repeat(4) {
+        var body = """{"context":$context,$bodySeed}"""
+        repeat(6) {
             if (hits.size >= limit) return
-            val json = runCatching {
-                downloader.postJson(
-                    url = "$host/youtubei/v1/browse?prettyPrint=false",
-                    json = body,
-                    origin = host,
-                    clientName = clientHeader,
-                    clientVersion = clientVersion,
-                )
-            }.getOrNull() ?: return
-            val root = runCatching { JSONObject(json) }.getOrNull() ?: return
+            val json = downloader.postJson(
+                url = "https://music.youtube.com/youtubei/v1/$endpoint?prettyPrint=false",
+                json = body,
+                origin = "https://music.youtube.com",
+                clientName = "67",
+                clientVersion = version,
+                userAgent = MUSIC_USER_AGENT,
+            )
+            val root = JSONObject(json)
+            val before = hits.size
             collectVideoHits(root, hits, limit)
-            val token = findContinuation(root) ?: return
+            if (hits.size == before && !json.contains("\"videoId\"")) return
+            val token = findPlaylistContinuation(root) ?: return
             body = """{"context":$context,"continuation":${JSONObject.quote(token)}}"""
         }
     }
@@ -290,8 +298,9 @@ class YoutubeClient @Inject constructor(
                         hits += YoutubeHit(
                             url = "https://music.youtube.com/watch?v=$videoId",
                             title = title,
-                            artist = jsonText(node.optJSONObject("ownerText"))
+                            artist = jsonText(node.optJSONObject("longBylineText"))
                                 .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
+                                .ifBlank { jsonText(node.optJSONObject("ownerText")) }
                                 .ifBlank { flexColumnText(node, 1) }
                                 .ifBlank { "YouTube Music" },
                             durationSec = 0,
@@ -334,9 +343,42 @@ class YoutubeClient @Inject constructor(
         return ""
     }
 
+    private fun findPlaylistContinuation(node: JSONObject): String? {
+        val shelf = findNamedObject(node, "musicPlaylistShelfRenderer")
+            ?: findNamedObject(node, "musicShelfRenderer")
+            ?: findNamedObject(node, "playlistPanelRenderer")
+        if (shelf != null) {
+            findContinuation(shelf.opt("continuations"))?.let { return it }
+            findContinuation(shelf.opt("contents"))?.let { return it }
+        }
+        return findContinuation(node)
+    }
+
+    private fun findNamedObject(node: Any?, name: String): JSONObject? {
+        when (node) {
+            is JSONObject -> {
+                node.optJSONObject(name)?.let { return it }
+                val keys = node.keys()
+                while (keys.hasNext()) {
+                    findNamedObject(node.opt(keys.next()), name)?.let { return it }
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until node.length()) {
+                    findNamedObject(node.opt(index), name)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
     private fun findContinuation(node: Any?): String? {
         when (node) {
             is JSONObject -> {
+                node.optJSONObject("nextContinuationData")
+                    ?.optString("continuation")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { return it }
                 node.optJSONObject("continuationCommand")
                     ?.optString("token")
                     ?.takeIf { it.isNotBlank() }
@@ -357,7 +399,13 @@ class YoutubeClient @Inject constructor(
 
     private fun videoTitle(node: JSONObject): String {
         jsonText(node.optJSONObject("title")).takeIf { it.isNotBlank() }?.let { return it }
-        return flexColumnText(node, 0)
+        node.optString("title").takeIf { it.isNotBlank() && !it.trimStart().startsWith("{") }?.let { return it }
+        flexColumnText(node, 0).takeIf { it.isNotBlank() }?.let { return it }
+        val label = node.optJSONObject("accessibility")
+            ?.optJSONObject("accessibilityData")
+            ?.optString("label")
+            .orEmpty()
+        return label.substringBefore(" by ").substringBefore(',').trim()
     }
 
     private fun flexColumnText(node: JSONObject, column: Int): String {
@@ -423,6 +471,8 @@ class YoutubeClient @Inject constructor(
         private val watchUrlBySongId = ConcurrentHashMap<String, String>()
         private val initialized = AtomicBoolean(false)
         private const val RESOLVE_CACHE_TTL_MS = 15 * 60 * 1000L
+        private const val MUSIC_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {
             val id = songId.trim()
