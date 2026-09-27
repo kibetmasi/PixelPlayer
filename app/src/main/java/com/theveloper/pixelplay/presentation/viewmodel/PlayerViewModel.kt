@@ -2225,6 +2225,19 @@ class PlayerViewModel @Inject constructor(
 
     fun playExternalUri(uri: Uri) = playbackDispatchStateHolder.playExternalUri(uri)
 
+    fun showPreparingSong(song: Song) {
+        _isSheetVisible.value = true
+        _sheetState.value = PlayerSheetState.EXPANDED
+        playbackStateHolder.updateStablePlayerState {
+            it.copy(
+                currentSong = song,
+                isPlaying = false,
+                playWhenReady = true,
+                totalDuration = song.duration.coerceAtLeast(0L),
+            )
+        }
+    }
+
     fun showPlayer() {
         if (stablePlayerState.value.currentSong != null) {
             _isSheetVisible.value = true

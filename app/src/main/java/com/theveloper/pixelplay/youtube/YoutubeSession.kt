@@ -1,6 +1,7 @@
 package com.theveloper.pixelplay.youtube
 
 import android.content.Context
+import android.webkit.CookieManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +43,10 @@ class YoutubeSession @Inject constructor(
     fun clear() {
         prefs.edit().clear().apply()
         _account.value = YoutubeAccount()
+        val cookies = CookieManager.getInstance()
+        cookies.removeAllCookies(null)
+        cookies.removeSessionCookies(null)
+        cookies.flush()
     }
 
     private fun read(): YoutubeAccount = YoutubeAccount(

@@ -41,7 +41,7 @@ import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Login
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.DockedSearchBar
@@ -141,7 +141,7 @@ fun YoutubeScreen(
         start = 16.dp,
         end = 16.dp,
         top = 8.dp,
-        bottom = bottomBarHeight + MiniPlayerHeight + 28.dp,
+        bottom = bottomBarHeight + MiniPlayerHeight + 30.dp,
     )
     val currentSongId = stablePlayer.currentSong?.id
     val isPlaying = stablePlayer.isPlaying
@@ -165,7 +165,6 @@ fun YoutubeScreen(
         YoutubeSection.SAVED -> saved
         else -> uiState.results
     }
-    var searchActive by remember { mutableStateOf(false) }
     val pullState = rememberPullToRefreshState()
 
     LaunchedEffect(section) {
@@ -182,45 +181,42 @@ fun YoutubeScreen(
             viewModel.openCollection(hit)
         } else if (!playGate.compareAndSet(false, true)) {
             Unit
-        } else if (asRadio) {
-            scope.launch {
-                try {
-                runCatching { viewModel.radioTracks(hit) }
-                    .onSuccess { queue ->
-                        val playable = queue.ifEmpty { listOf(hit) }
-                        val start = viewModel.resolvePlayable(playable.first())
-                        playerViewModel.playSongs(
-                            songsToPlay = listOf(start),
-                            startSong = start,
-                            queueName = "YouTube Radio",
-                        )
-                        viewModel.prefetchAfter(playable.first(), playable) { queued ->
-                            playerViewModel.addSongToQueue(queued)
-                        }
-                    }
-                    .onFailure { error ->
-                        viewModel.reportError(error.message ?: "Couldn't start radio")
-                    }
-                } finally {
-                    playGate.set(false)
-                }
-            }
         } else {
+            playerViewModel.showPreparingSong(placeholderSong(hit))
             scope.launch {
                 try {
-                runCatching { viewModel.resolvePlayable(hit) }
-                    .onSuccess { song ->
-                        playerViewModel.playSongs(
-                            songsToPlay = listOf(song),
-                            startSong = song,
-                            queueName = "YouTube Music",
-                        )
-                        viewModel.prefetchAfter(hit, rows) { queued ->
-                            playerViewModel.addSongToQueue(queued)
-                        }
-                    }
-                    .onFailure { error ->
-                        viewModel.reportError(error.message ?: "Couldn't play this track")
+                    if (asRadio) {
+                        runCatching { viewModel.radioTracks(hit) }
+                            .onSuccess { queue ->
+                                val playable = queue.ifEmpty { listOf(hit) }
+                                val start = viewModel.resolvePlayable(playable.first())
+                                playerViewModel.playSongs(
+                                    songsToPlay = listOf(start),
+                                    startSong = start,
+                                    queueName = "YouTube Radio",
+                                )
+                                viewModel.prefetchAfter(playable.first(), playable) { queued ->
+                                    playerViewModel.addSongToQueue(queued)
+                                }
+                            }
+                            .onFailure { error ->
+                                viewModel.reportError(error.message ?: "Couldn't start radio")
+                            }
+                    } else {
+                        runCatching { viewModel.resolvePlayable(hit) }
+                            .onSuccess { song ->
+                                playerViewModel.playSongs(
+                                    songsToPlay = listOf(song),
+                                    startSong = song,
+                                    queueName = "YouTube Music",
+                                )
+                                viewModel.prefetchAfter(hit, rows) { queued ->
+                                    playerViewModel.addSongToQueue(queued)
+                                }
+                            }
+                            .onFailure { error ->
+                                viewModel.reportError(error.message ?: "Couldn't play this track")
+                            }
                     }
                 } finally {
                     playGate.set(false)
@@ -229,76 +225,59 @@ fun YoutubeScreen(
         }
     }
 
+    val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(headerColor),
+        containerColor = headerColor,
         topBar = {
-            if (browseSection == YoutubeSection.HOME && uiState.collectionTitle == null) {
-                YoutubeCompactHeader(
-                    signedIn = account.isSignedIn,
-                    onBeta = { showBeta = true },
-                    onChangelog = { showChangelog = true },
-                    onAccount = { navController.navigateSafely(Screen.YoutubeSettings.route) },
-                    onSettings = { navController.navigateSafely(Screen.Settings.route) },
-                )
-            } else {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = uiState.collectionTitle ?: title,
-                            fontFamily = GoogleSansRounded,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (uiState.collectionTitle == null && browseSection == YoutubeSection.HOME) {
-                            Text(
-                                text = stringResource(R.string.youtube_home_subtitle),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontFamily = GoogleSansRounded,
-                            )
-                        }
-                    }
+            YoutubeCompactHeader(
+                title = if (browseSection == YoutubeSection.SEARCH && uiState.collectionTitle == null) {
+                    null
+                } else {
+                    uiState.collectionTitle ?: title
                 },
-                navigationIcon = {
-                    if (uiState.collectionTitle != null) {
-                        IconButton(onClick = viewModel::closeCollection) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.youtube_back))
-                        }
-                    }
-                },
-                actions = {
-                    if (section == YoutubeSection.LIKED) {
-                        TextButton(
-                            onClick = {
-                                if (account.isSignedIn) viewModel.signOut()
-                                else context.startActivity(Intent(context, YoutubeLoginActivity::class.java))
-                            },
-                        ) {
-                            Text(
-                                stringResource(
-                                    if (account.isSignedIn) R.string.youtube_sign_out else R.string.youtube_sign_in,
-                                ),
-                                fontFamily = GoogleSansRounded,
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
+                showTitle = browseSection != YoutubeSection.HOME || uiState.collectionTitle != null,
+                query = uiState.query,
+                onQueryChange = viewModel::onQueryChange,
+                showSearch = browseSection == YoutubeSection.SEARCH && uiState.collectionTitle == null,
+                searchFilter = uiState.filter,
+                onFilter = viewModel::setFilter,
+                onBack = if (uiState.collectionTitle != null) viewModel::closeCollection else null,
+                signedIn = account.isSignedIn,
+                onBeta = { showBeta = true },
+                onChangelog = { showChangelog = true },
+                onAccount = { navController.navigateSafely(Screen.YoutubeSettings.route) },
+                onSettings = { navController.navigateSafely(Screen.Settings.route) },
             )
-            }
         },
     ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = innerPadding.calculateTopPadding())
+                .background(headerColor),
+        ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = AbsoluteSmoothCornerShape(
+                cornerRadiusTL = 34.dp,
+                cornerRadiusTR = 34.dp,
+                cornerRadiusBL = 0.dp,
+                cornerRadiusBR = 0.dp,
+                smoothnessAsPercentTL = 60,
+                smoothnessAsPercentTR = 60,
+                smoothnessAsPercentBL = 60,
+                smoothnessAsPercentBR = 60,
+            ),
+        ) {
         PullToRefreshBox(
             isRefreshing = uiState.isRefreshing,
             onRefresh = viewModel::refresh,
             state = pullState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
+            modifier = Modifier.fillMaxSize(),
                     indicator = {
                         PullToRefreshDefaults.LoadingIndicator(
                             state = pullState,
@@ -310,69 +289,6 @@ fun YoutubeScreen(
                     },
         ) {
             Column(Modifier.fillMaxSize()) {
-                if (section == YoutubeSection.SEARCH && uiState.collectionTitle == null) {
-                    DockedSearchBar(
-                        inputField = {
-                            SearchBarDefaults.InputField(
-                                query = uiState.query,
-                                onQueryChange = viewModel::onQueryChange,
-                                onSearch = { searchActive = false },
-                                expanded = searchActive,
-                                onExpandedChange = { searchActive = it },
-                                placeholder = {
-                                    Text(
-                                        stringResource(R.string.youtube_search_placeholder),
-                                        fontFamily = GoogleSansRounded,
-                                    )
-                                },
-                                trailingIcon = if (uiState.query.isNotEmpty()) {
-                                    {
-                                        IconButton(onClick = { viewModel.onQueryChange("") }) {
-                                            Icon(
-                                                Icons.Rounded.Close,
-                                                contentDescription = stringResource(R.string.youtube_clear_search),
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    null
-                                },
-                            )
-                        },
-                        expanded = false,
-                        onExpandedChange = { searchActive = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        shape = RoundedCornerShape(28.dp),
-                    ) {}
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        YoutubeSearchFilter.entries.forEach { filter ->
-                            FilterChip(
-                                selected = uiState.filter == filter,
-                                onClick = { viewModel.setFilter(filter) },
-                                label = {
-                                    Text(
-                                        stringResource(
-                                            when (filter) {
-                                                YoutubeSearchFilter.SONGS -> R.string.youtube_filter_songs
-                                                YoutubeSearchFilter.ALBUMS -> R.string.youtube_filter_albums
-                                                YoutubeSearchFilter.PLAYLISTS -> R.string.youtube_filter_playlists
-                                            }
-                                        ),
-                                        fontFamily = GoogleSansRounded,
-                                    )
-                                },
-                            )
-                        }
-                    }
-                }
-
                 uiState.error?.let { message ->
                     Surface(
                         modifier = Modifier
@@ -547,6 +463,8 @@ fun YoutubeScreen(
                 }
             }
         }
+        }
+        }
     }
     if (showChangelog) {
         ModalBottomSheet(onDismissRequest = { showChangelog = false }) {
@@ -562,70 +480,157 @@ fun YoutubeScreen(
 
 @Composable
 private fun YoutubeCompactHeader(
+    title: String?,
+    showTitle: Boolean,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    showSearch: Boolean,
+    searchFilter: YoutubeSearchFilter,
+    onFilter: (YoutubeSearchFilter) -> Unit,
+    onBack: (() -> Unit)?,
     signedIn: Boolean,
     onBeta: () -> Unit,
     onChangelog: () -> Unit,
     onAccount: () -> Unit,
     onSettings: () -> Unit,
 ) {
-    val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-    val sheetCurve = AbsoluteSmoothCornerShape(
-        cornerRadiusTL = 32.dp,
-        smoothnessAsPercentTL = 70,
-        cornerRadiusTR = 32.dp,
-        smoothnessAsPercentTR = 70,
-        cornerRadiusBL = 0.dp,
-        smoothnessAsPercentBL = 60,
-        cornerRadiusBR = 0.dp,
-        smoothnessAsPercentBR = 60,
-    )
+    val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
     Column(Modifier.fillMaxWidth().background(headerColor)) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp)
-            .padding(top = 6.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        FilledTonalButton(
-            onClick = onBeta,
-            shape = CircleShape,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.topbar_beta_letter) + " " + stringResource(R.string.topbar_beta_label),
-                fontFamily = GoogleSansRounded,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        FilledIconButton(onClick = onAccount) {
-            Icon(
-                imageVector = if (signedIn) Icons.Rounded.AccountCircle else Icons.Rounded.Login,
-                contentDescription = stringResource(R.string.youtube_sign_in),
-            )
-        }
-        FilledIconButton(onClick = onChangelog) {
-            Icon(
-                painter = painterResource(R.drawable.round_newspaper_24),
-                contentDescription = stringResource(R.string.topbar_cd_changelog),
-            )
-        }
-        FilledIconButton(onClick = onSettings) {
-            Icon(
-                painter = painterResource(R.drawable.rounded_settings_24),
-                contentDescription = stringResource(R.string.common_settings),
-            )
-        }
-    }
-        Box(
-            Modifier
+        Row(
+            modifier = Modifier
                 .fillMaxWidth()
-                .height(28.dp)
-                .clip(sheetCurve)
-                .background(MaterialTheme.colorScheme.surface),
-        )
+                .statusBarsPadding()
+                .padding(start = 8.dp, end = 14.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (onBack != null) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = stringResource(R.string.youtube_back),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            } else {
+                FilledTonalButton(
+                    onClick = onBeta,
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.topbar_beta_letter) + " " + stringResource(R.string.topbar_beta_label),
+                        fontFamily = GoogleSansRounded,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            if (showTitle && !title.isNullOrBlank()) {
+                Text(
+                    text = title,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                    fontFamily = GoogleSansRounded,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            FilledIconButton(onClick = onAccount) {
+                Icon(
+                    imageVector = if (signedIn) Icons.Rounded.AccountCircle else Icons.Rounded.AccountCircle,
+                    contentDescription = stringResource(R.string.youtube_sign_in),
+                )
+            }
+            FilledIconButton(onClick = onChangelog) {
+                Icon(
+                    painter = painterResource(R.drawable.round_newspaper_24),
+                    contentDescription = stringResource(R.string.topbar_cd_changelog),
+                )
+            }
+            FilledIconButton(onClick = onSettings) {
+                Icon(
+                    painter = painterResource(R.drawable.rounded_settings_24),
+                    contentDescription = stringResource(R.string.common_settings),
+                )
+            }
+        }
+        if (showSearch) {
+            DockedSearchBar(
+                inputField = {
+                    SearchBarDefaults.InputField(
+                        query = query,
+                        onQueryChange = onQueryChange,
+                        onSearch = {},
+                        expanded = false,
+                        onExpandedChange = {},
+                        placeholder = {
+                            Text(
+                                stringResource(R.string.youtube_search_placeholder),
+                                fontFamily = GoogleSansRounded,
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.Search,
+                                contentDescription = stringResource(R.string.youtube_search_title),
+                                modifier = Modifier.size(24.dp),
+                            )
+                        },
+                        trailingIcon = if (query.isNotEmpty()) {
+                            {
+                                IconButton(
+                                    onClick = { onQueryChange("") },
+                                    modifier = Modifier.size(48.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Close,
+                                        contentDescription = stringResource(R.string.youtube_clear_search),
+                                    )
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                },
+                expanded = false,
+                onExpandedChange = {},
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(28.dp),
+            ) {}
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                YoutubeSearchFilter.entries.forEach { filter ->
+                    FilterChip(
+                        selected = searchFilter == filter,
+                        onClick = { onFilter(filter) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    when (filter) {
+                                        YoutubeSearchFilter.SONGS -> R.string.youtube_filter_songs
+                                        YoutubeSearchFilter.ALBUMS -> R.string.youtube_filter_albums
+                                        YoutubeSearchFilter.PLAYLISTS -> R.string.youtube_filter_playlists
+                                    }
+                                ),
+                                fontFamily = GoogleSansRounded,
+                            )
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 

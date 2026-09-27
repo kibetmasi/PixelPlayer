@@ -171,8 +171,16 @@ class YoutubeViewModel @Inject constructor(
     }
 
     suspend fun resolvePlayable(hit: YoutubeHit): Song = withContext(Dispatchers.IO) {
-        val track = client.resolveTrack(hit.url)
-        client.toSong(track, hit.url)
+        var lastError: Throwable? = null
+        repeat(2) {
+            val resolved = runCatching {
+                val track = client.resolveTrack(hit.url)
+                client.toSong(track, hit.url)
+            }
+            if (resolved.isSuccess) return@withContext resolved.getOrThrow()
+            lastError = resolved.exceptionOrNull()
+        }
+        throw lastError ?: IllegalStateException("Couldn't play this track")
     }
 
     fun toggleLike(hit: YoutubeHit) {
@@ -196,7 +204,10 @@ class YoutubeViewModel @Inject constructor(
 
     fun signOut() {
         session.clear()
+        client.likedHits = emptyList()
+        client.feedShelves = emptyList()
         if (_uiState.value.section == YoutubeSection.LIKED) loadLiked(refreshing = true)
+        if (_uiState.value.section == YoutubeSection.HOME) loadFeed(refreshing = true)
     }
 
     private fun loadLiked(refreshing: Boolean = false) {
