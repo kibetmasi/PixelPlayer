@@ -9,6 +9,11 @@ package com.theveloper.pixelplay.presentation.screens
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,8 +57,6 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DockedSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -102,7 +105,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -114,7 +116,6 @@ import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHei
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
 import com.theveloper.pixelplay.presentation.components.subcomps.SelectionActionRow
-import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
 import androidx.navigation.NavController
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
@@ -176,7 +177,7 @@ fun YoutubeScreen(
         start = 16.dp,
         end = 16.dp,
         top = 8.dp,
-        bottom = bottomBarHeight + MiniPlayerHeight + 30.dp + if (selecting) 72.dp else 0.dp,
+        bottom = bottomBarHeight + MiniPlayerHeight + 30.dp,
     )
     val currentSongId = stablePlayer.currentSong?.id
     val isPlaying = stablePlayer.isPlaying
@@ -434,7 +435,30 @@ fun YoutubeScreen(
                 smoothnessAsPercentBR = 60,
             ),
         ) {
-        Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = selecting,
+            enter = slideInHorizontally { -it } + fadeIn(),
+            exit = slideOutHorizontally { it } + fadeOut(),
+        ) {
+            SelectionActionRow(
+                selectedCount = selectedUrls.size,
+                onSelectAll = {
+                    selectedUrls = rows.filter { it.isSelectableTrack() }.map { it.url }
+                },
+                onDeselect = { clearYoutubeSelection() },
+                onOptionsClick = {
+                    if (selectedHits.isNotEmpty()) {
+                        showMultiSelectionSheet = true
+                        viewModel.ensureLibraryPlaylists()
+                    }
+                },
+                modifier = Modifier
+                    .padding(top = 6.dp, start = 10.dp, end = 10.dp, bottom = 4.dp)
+                    .heightIn(min = 56.dp),
+            )
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         PullToRefreshBox(
             isRefreshing = uiState.isRefreshing,
             onRefresh = viewModel::refresh,
@@ -699,44 +723,6 @@ fun YoutubeScreen(
                 }
             }
         }
-        if (selecting) {
-            SelectionCountPill(
-                selectedCount = selectedUrls.size,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 12.dp)
-                    .zIndex(2f),
-            )
-            Card(
-                shape = AbsoluteSmoothCornerShape(28.dp, 60),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(
-                        start = 16.dp,
-                        end = 16.dp,
-                        bottom = MiniPlayerHeight + 16.dp,
-                    )
-                    .zIndex(2f),
-            ) {
-                SelectionActionRow(
-                    selectedCount = selectedUrls.size,
-                    onSelectAll = {
-                        selectedUrls = rows.filter { it.isSelectableTrack() }.map { it.url }
-                    },
-                    onDeselect = { clearYoutubeSelection() },
-                    onOptionsClick = {
-                        if (selectedHits.isNotEmpty()) {
-                            showMultiSelectionSheet = true
-                            viewModel.ensureLibraryPlaylists()
-                        }
-                    },
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                )
-            }
         }
         }
         }
