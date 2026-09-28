@@ -563,11 +563,6 @@ private fun buildSetupPages(sdkInt: Int): List<SetupPage> {
     pages += SetupPage.ThemeSelection
     pages += SetupPage.LibraryLayout
     pages += SetupPage.NavBarLayout
-
-    if (sdkInt >= Build.VERSION_CODES.S) {
-        pages += SetupPage.AlarmsPermission
-    }
-
     pages += SetupPage.BatteryOptimization
     pages += SetupPage.Finish
     return pages

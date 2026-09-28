@@ -1729,8 +1729,9 @@ class PlayerViewModel @Inject constructor(
         }, ContextCompat.getMainExecutor(context))
 
 
-        // Start Cast discovery
-        castStateHolder.startDiscovery()
+        // Start Cast discovery. Missing nearby/Bluetooth perms must not kill launch.
+        runCatching { castStateHolder.startDiscovery() }
+            .onFailure { Log.w("PlayerViewModel", "Cast discovery skipped", it) }
 
         // Observe selection for HTTP server management
         viewModelScope.launch {
@@ -1750,7 +1751,8 @@ class PlayerViewModel @Inject constructor(
         }
 
         // Initialize connectivity monitoring (WiFi/Bluetooth)
-        connectivityStateHolder.initialize()
+        runCatching { connectivityStateHolder.initialize() }
+            .onFailure { Log.w("PlayerViewModel", "Connectivity monitoring skipped", it) }
 
         // Initialize sleep timer state holder
         sleepTimerStateHolder.initialize(

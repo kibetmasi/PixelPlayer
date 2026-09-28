@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - About lists KibetMasi as the maintainer.
 - Changelog sheet stays half-screen until you drag or scroll it open.
-- Dropped unused local-library, Cast, and Bluetooth permissions.
+- Dropped unused local-library and Bluetooth runtime permissions.
 
 ### Fixed
+- Launch no longer crashes on Pixel Fold after permission cleanup (Cast/Wi-Fi init).
 - Authenticated InnerTube session (visitorData + DATASYNC_ID) so likes and home are yours.
 - Tapping a playlist such as Recap opens it through YouTube Music browse, not NewPipe.
 - Liking a song now calls YouTube Music like/like and like/removelike.
