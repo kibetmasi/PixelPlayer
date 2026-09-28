@@ -500,6 +500,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun canRequestPackageInstallsSafely(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+        return runCatching { packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+    }
+
+    private fun openUnknownSourcesSettings(): Boolean {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            "package:$packageName".toUri(),
+        )
+        return runCatching {
+            startActivity(intent)
+            true
+        }.getOrDefault(false)
+    }
+
     private fun installDownloadedApk(file: File) {
         val uri = FileProvider.getUriForFile(this, "$packageName.provider", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -1191,16 +1207,13 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onOpenPlayStore = { url ->
                                     if (GitHubReleaseUpdateService.isAllowedApkDownload(url)) {
-                                        if (!packageManager.canRequestPackageInstalls()) {
+                                        if (!canRequestPackageInstallsSafely()) {
                                             updateAnnouncement = updateAnnouncement.copy(
                                                 body = getString(R.string.update_dialog_install_permission),
                                             )
-                                            startActivity(
-                                                Intent(
-                                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                                    "package:$packageName".toUri(),
-                                                ),
-                                            )
+                                            if (!openUnknownSourcesSettings()) {
+                                                openReleasePage(url)
+                                            }
                                             return@PlayStoreAnnouncementDialog
                                         }
                                         if (updateDownloadBusy) return@PlayStoreAnnouncementDialog
