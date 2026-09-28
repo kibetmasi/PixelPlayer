@@ -60,6 +60,13 @@
     <string name="youtube_cookie_invalid">That cookie is missing a signed-in YouTube session. Copy the Cookie header from a youtube.com request after you are logged in.</string>
     <string name="youtube_signed_in">Signed in</string>
     <string name="youtube_radio_explainer">Radio keeps playing songs that sound like the one you start.</string>
+    <string name="youtube_add_to_playlist">Add to playlist</string>
+    <string name="youtube_new_playlist">New playlist</string>
+    <string name="youtube_playlist_name">Playlist name</string>
+    <string name="youtube_create">Create</string>
+    <string name="youtube_cancel">Cancel</string>
+    <string name="youtube_selected_count">%1$d selected</string>
+    <string name="youtube_add_to_playlist_empty">No playlists in your library yet.</string>
     <string name="youtube_back">Back</string>
 
     <!-- SoundCloud -->

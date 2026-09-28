@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-youtube] - 2026-09-28
+
+### Added
+- YouTube Music sign-in, personalized Feed, Liked Music, library playlists, and radio.
+- Skip silence playback setting.
+- Multi-select songs and add them to a YouTube Music playlist, or create a new one.
+- Infinite scroll on Liked Music, newest likes first.
+
+### Changed
+- About lists KibetMasi as the maintainer.
+- Changelog sheet stays half-screen until you drag or scroll it open.
+- Dropped unused local-library, Cast, and Bluetooth permissions.
+
+### Fixed
+- Authenticated InnerTube session (visitorData + DATASYNC_ID) so likes and home are yours.
+- Tapping a playlist such as Recap opens it through YouTube Music browse, not NewPipe.
+- Liking a song now calls YouTube Music like/like and like/removelike.
+- Tapping the current song pauses or resumes instead of restarting.
+- First tap starts playback; a second tap is not required.
+
 ## [0.8.1-soundcloud] - 2026-09-23
 
 ### Added

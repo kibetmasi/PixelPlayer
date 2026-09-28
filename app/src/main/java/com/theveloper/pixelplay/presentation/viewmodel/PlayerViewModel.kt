@@ -218,6 +218,7 @@ class PlayerViewModel @Inject constructor(
     private val sessionToken: SessionToken,
     private val mediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory,
     private val youtubeMusicStore: com.theveloper.pixelplay.youtube.YoutubeMusicStore,
+    private val youtubeClient: com.theveloper.pixelplay.youtube.YoutubeClient,
 ) : ViewModel() {
 
     private val _playerUiState = MutableStateFlow(PlayerUiState())
@@ -2285,6 +2286,15 @@ class PlayerViewModel @Inject constructor(
         val currentSong = playbackStateHolder.stablePlayerState.value.currentSong ?: return
         if (currentSong.id.startsWith("yt_")) {
             youtubeMusicStore.toggleLike(currentSong)
+            val videoId = com.theveloper.pixelplay.youtube.YoutubeClient.watchUrlForSongId(currentSong.id)
+                ?.let(com.theveloper.pixelplay.youtube.YoutubeClient::videoIdFromUrl)
+                .orEmpty()
+            if (videoId.length == 11) {
+                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val liked = currentSong.id in youtubeMusicStore.likedSongIds.value
+                    runCatching { youtubeClient.likeVideo(videoId, liked) }
+                }
+            }
             return
         }
         viewModelScope.launch {

@@ -362,8 +362,18 @@ class YoutubeClient @Inject constructor(
         navigation?.optJSONObject("watchEndpoint")?.let { watch ->
             val videoId = watch.optString("videoId")
             val playlistId = watch.optString("playlistId")
+            if (isCatalogPlaylist(playlistId)) {
+                return YoutubeHit(
+                    url = "https://music.youtube.com/playlist?list=$playlistId",
+                    title = title,
+                    artist = subtitle.ifBlank { "YouTube Music" },
+                    durationSec = 0,
+                    thumbnailUrl = thumbnail,
+                    kind = YoutubeHit.Kind.COLLECTION,
+                )
+            }
             if (videoId.length == 11) {
-                val isMix = playlistId.startsWith("RD") && !playlistId.startsWith("RDAMVM")
+                val isMix = isRadioMix(playlistId)
                 return YoutubeHit(
                     url = if (isMix) "https://www.youtube.com/watch?v=$videoId&list=$playlistId"
                     else "https://music.youtube.com/watch?v=$videoId",
@@ -584,9 +594,15 @@ class YoutubeClient @Inject constructor(
         return loadCollectionTracks("https://www.youtube.com/watch?v=$videoId&list=RD$videoId", limit)
     }
 
-    fun loadCollectionTracks(url: String, limit: Int = 80): List<YoutubeHit> {
+    fun loadCollectionTracks(url: String, limit: Int = 200): List<YoutubeHit> {
         applySession()
-        if (url.contains("list=LM")) return loadLikedPage(pageSize = limit).hits.take(limit)
+        val playlistId = playlistIdFromUrl(url)
+        if (playlistId == "LM") return loadLikedPage(pageSize = limit).hits.take(limit)
+        if (playlistId.isNotBlank()) {
+            val viaMusic = runCatching { loadPlaylistViaInnerTube(playlistId, limit) }
+                .getOrDefault(emptyList())
+            if (viaMusic.isNotEmpty()) return viaMusic
+        }
         val info = PlaylistInfo.getInfo(youtube(), url.trim())
         return info.relatedItems
             .asSequence()
@@ -594,6 +610,83 @@ class YoutubeClient @Inject constructor(
             .filter { it.url.isNotBlank() && it.kind == YoutubeHit.Kind.TRACK }
             .take(limit)
             .toList()
+    }
+
+    /**
+     * Same path KuroMusic/InnerTune use: browse `VL` + playlist id on music.youtube.com.
+     * Recap / official playlists (RDCLAK…) fail in NewPipe but work here.
+     */
+    private fun loadPlaylistViaInnerTube(playlistId: String, limit: Int): List<YoutubeHit> {
+        val browseId = if (playlistId.startsWith("VL")) playlistId else "VL$playlistId"
+        val hits = linkedSetOf<YoutubeHit>()
+        var token: String? = null
+        var first = true
+        var requests = 0
+        do {
+            val before = hits.size
+            val root = musicBrowse(
+                browseId = if (first) browseId else null,
+                continuation = token,
+            )
+            first = false
+            collectLikedShelf(root, hits, limit)
+            token = findPlaylistContinuation(root)
+            requests++
+            if (hits.size == before) break
+        } while (!token.isNullOrBlank() && hits.size < limit && requests < 8)
+        return hits.take(limit)
+    }
+
+    /** InnerTube like/like and like/removelike — this is what actually updates Liked Music. */
+    fun likeVideo(videoId: String, like: Boolean) {
+        applySession()
+        require(session.isSignedIn()) { "Sign in to like songs on YouTube Music." }
+        require(videoId.length == 11) { "Missing video id." }
+        val endpoint = if (like) "like/like" else "like/removelike"
+        val body = JSONObject()
+            .put("context", JSONObject(musicContext()))
+            .put("target", JSONObject().put("videoId", videoId))
+        musicPost(endpoint, body.toString())
+    }
+
+    /** Browse/edit_playlist ACTION_ADD_VIDEO, same payload KuroMusic sends. */
+    fun addVideosToPlaylist(playlistId: String, videoIds: List<String>) {
+        applySession()
+        require(session.isSignedIn()) { "Sign in to add songs to a playlist." }
+        val ids = videoIds.map { it.trim() }.filter { it.length == 11 }.distinct()
+        require(ids.isNotEmpty()) { "No songs to add." }
+        val actions = JSONArray()
+        ids.forEach { videoId ->
+            actions.put(
+                JSONObject()
+                    .put("action", "ACTION_ADD_VIDEO")
+                    .put("addedVideoId", videoId),
+            )
+        }
+        val body = JSONObject()
+            .put("context", JSONObject(musicContext()))
+            .put("playlistId", playlistId.removePrefix("VL"))
+            .put("actions", actions)
+        musicPost("browse/edit_playlist", body.toString())
+    }
+
+    fun createPlaylist(title: String, videoIds: List<String> = emptyList()): String {
+        applySession()
+        require(session.isSignedIn()) { "Sign in to create a playlist." }
+        val name = title.trim()
+        require(name.isNotEmpty()) { "Give the playlist a name." }
+        val body = JSONObject()
+            .put("context", JSONObject(musicContext()))
+            .put("title", name)
+            .put("privacyStatus", "PRIVATE")
+        val ids = videoIds.map { it.trim() }.filter { it.length == 11 }
+        if (ids.isNotEmpty()) body.put("videoIds", JSONArray(ids))
+        val root = musicPost("playlist/create", body.toString())
+        val created = root.optString("playlistId").ifBlank {
+            root.optJSONObject("playlistId")?.optString("playlistId").orEmpty()
+        }
+        require(created.isNotBlank()) { "YouTube Music did not create the playlist." }
+        return created
     }
 
     /**
@@ -937,6 +1030,44 @@ class YoutubeClient @Inject constructor(
         fun watchUrlForSongId(songId: String): String? = watchUrlBySongId[songId]
 
         fun songIdForUrl(url: String): String = "yt_${url.trim().hashCode().toUInt()}"
+
+        fun videoIdFromUrl(url: String): String {
+            val fromQuery = url.substringAfter("v=", "")
+                .substringBefore('&')
+                .substringBefore('?')
+                .trim()
+            return if (fromQuery.length == 11) fromQuery else ""
+        }
+
+        fun playlistIdFromUrl(url: String): String {
+            val fromList = url.substringAfter("list=", "")
+                .substringBefore('&')
+                .substringBefore('?')
+                .trim()
+            if (fromList.isNotBlank()) return fromList.removePrefix("VL")
+            return Regex("""browse/(VL)?([^/?&]+)""")
+                .find(url)
+                ?.groupValues
+                ?.getOrNull(2)
+                .orEmpty()
+                .removePrefix("VL")
+        }
+
+        fun isCatalogPlaylist(playlistId: String): Boolean {
+            if (playlistId.isBlank()) return false
+            return playlistId.startsWith("PL") ||
+                playlistId.startsWith("OLAK") ||
+                playlistId.startsWith("RDCLAK") ||
+                playlistId.startsWith("RDTMA") ||
+                playlistId == "LM" ||
+                playlistId == "WL" ||
+                playlistId.startsWith("VL")
+        }
+
+        fun isRadioMix(playlistId: String): Boolean {
+            if (!playlistId.startsWith("RD")) return false
+            return !isCatalogPlaylist(playlistId) && !playlistId.startsWith("RDAMVM")
+        }
 
         fun fullBleedArtwork(url: String?): String? {
             val raw = url?.trim().orEmpty()

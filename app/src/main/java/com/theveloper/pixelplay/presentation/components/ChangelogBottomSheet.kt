@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -25,8 +27,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumExtendedFloatingActionButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,6 +66,24 @@ import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 
 val LocalRequestAppUpdateCheck = staticCompositionLocalOf<() -> Unit> { {} }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun ChangelogModalSheet(onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        val fill = if (sheetState.targetValue == SheetValue.Expanded) 1f else 0.55f
+        ChangelogBottomSheet(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(fill),
+            onDismiss = onDismiss,
+        )
+    }
+}
+
 private const val CHANGELOG_RAW_URL =
     "https://raw.githubusercontent.com/kibetmasi/PixelPlayer/master/CHANGELOG.md"
 private const val CHANGELOG_PAGE_URL =
@@ -94,10 +117,10 @@ fun ChangelogBottomSheet(
         loading = false
     }
 
-    Box(modifier = modifier.fillMaxWidth()) {
+    Box(modifier = modifier.fillMaxWidth().fillMaxHeight()) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -126,6 +149,7 @@ fun ChangelogBottomSheet(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .weight(1f, fill = true)
                     .padding(top = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp),
                 contentPadding = PaddingValues(bottom = 120.dp),

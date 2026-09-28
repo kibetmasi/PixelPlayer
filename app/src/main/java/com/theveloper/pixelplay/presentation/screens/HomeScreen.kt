@@ -87,7 +87,7 @@ import com.theveloper.pixelplay.data.preferences.CollagePattern
 import com.theveloper.pixelplay.presentation.components.AlbumArtCollage
 import com.theveloper.pixelplay.presentation.components.BetaInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.Beta05CleanInstallDisclaimerDialog
-import com.theveloper.pixelplay.presentation.components.ChangelogBottomSheet
+import com.theveloper.pixelplay.presentation.components.ChangelogModalSheet
 import com.theveloper.pixelplay.presentation.netease.dashboard.NeteaseDashboardViewModel
 import com.theveloper.pixelplay.presentation.jellyfin.dashboard.JellyfinDashboardViewModel
 import com.theveloper.pixelplay.presentation.navidrome.dashboard.NavidromeDashboardViewModel
@@ -534,12 +534,7 @@ fun HomeScreen(
         }
     }
     if (showChangelogBottomSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showChangelogBottomSheet = false },
-            sheetState = sheetState
-        ) {
-            ChangelogBottomSheet(onDismiss = { showChangelogBottomSheet = false })
-        }
+        ChangelogModalSheet(onDismiss = { showChangelogBottomSheet = false })
     }
     if (showBetaInfoBottomSheet) {
         ModalBottomSheet(

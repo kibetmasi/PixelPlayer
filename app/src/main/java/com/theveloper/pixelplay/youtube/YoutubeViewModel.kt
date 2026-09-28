@@ -7,8 +7,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -39,6 +42,10 @@ class YoutubeViewModel @Inject constructor(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(YoutubeUiState())
     val uiState: StateFlow<YoutubeUiState> = _uiState.asStateFlow()
+    private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val notices: SharedFlow<String> = _notices.asSharedFlow()
+    private val _libraryPlaylists = MutableStateFlow<List<YoutubeHit>>(emptyList())
+    val libraryPlaylists: StateFlow<List<YoutubeHit>> = _libraryPlaylists.asStateFlow()
     val likedTracks: StateFlow<List<YoutubeHit>> = musicStore.liked
     val savedTracks: StateFlow<List<YoutubeHit>> = musicStore.saved
     val recentTracks: StateFlow<List<YoutubeHit>> = musicStore.recent
@@ -162,15 +169,21 @@ class YoutubeViewModel @Inject constructor(
                 it.copy(isLoading = true, error = null, collectionTitle = hit.title, results = emptyList())
             }
             val loaded = runCatching {
-                withContext(Dispatchers.IO) { client.loadCollectionTracks(hit.url) }
+                withContext(Dispatchers.IO) { client.loadCollectionTracks(hit.url, limit = 200) }
             }
             loaded.fold(
                 onSuccess = { tracks ->
                     _uiState.update { it.copy(isLoading = false, results = tracks) }
+                    if (tracks.isEmpty()) {
+                        _uiState.update { it.copy(error = "This playlist did not return any tracks.") }
+                    }
                 },
                 onFailure = { error ->
                     _uiState.update {
-                        it.copy(isLoading = false, error = error.message ?: "Couldn't open this collection")
+                        it.copy(
+                            isLoading = false,
+                            error = error.message ?: "Couldn't open this playlist",
+                        )
                     }
                 },
             )
@@ -206,8 +219,116 @@ class YoutubeViewModel @Inject constructor(
         throw lastError ?: IllegalStateException("Couldn't play this track")
     }
 
+    fun isLiked(hit: YoutubeHit): Boolean {
+        val id = YoutubeClient.songIdForUrl(hit.url)
+        return id in musicStore.likedSongIds.value || client.likedHits.any { it.url == hit.url }
+    }
+
     fun toggleLike(hit: YoutubeHit) {
-        musicStore.toggleLike(hit)
+        val videoId = YoutubeClient.videoIdFromUrl(hit.url)
+        val wasLiked = isLiked(hit)
+        val locallyLiked = YoutubeClient.songIdForUrl(hit.url) in musicStore.likedSongIds.value
+        if (locallyLiked == wasLiked || !wasLiked) {
+            musicStore.toggleLike(hit)
+        } else {
+            // Liked on the account but not stored locally — drop it from the account list.
+            client.likedHits = client.likedHits.filterNot { it.url == hit.url }
+            if (_uiState.value.section == YoutubeSection.LIKED) {
+                _uiState.update { state ->
+                    state.copy(results = state.results.filterNot { it.url == hit.url })
+                }
+            }
+        }
+        if (!session.isSignedIn() || videoId.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { client.likeVideo(videoId, like = !wasLiked) }
+            }.onFailure { error ->
+                // Roll the optimistic change back.
+                if (locallyLiked == wasLiked || !wasLiked) musicStore.toggleLike(hit)
+                else {
+                    client.likedHits = (listOf(hit) + client.likedHits).distinctBy { it.url }
+                    if (_uiState.value.section == YoutubeSection.LIKED) {
+                        _uiState.update { state ->
+                            state.copy(results = (listOf(hit) + state.results).distinctBy { it.url })
+                        }
+                    }
+                }
+                _uiState.update {
+                    it.copy(error = error.message ?: "Couldn't update the like on YouTube Music")
+                }
+            }.onSuccess {
+                if (wasLiked) {
+                    client.likedHits = client.likedHits.filterNot { it.url == hit.url }
+                    if (_uiState.value.section == YoutubeSection.LIKED) {
+                        _uiState.update { state ->
+                            state.copy(results = state.results.filterNot { it.url == hit.url })
+                        }
+                    }
+                } else {
+                    client.likedHits = (listOf(hit) + client.likedHits).distinctBy { it.url }
+                }
+            }
+        }
+    }
+
+    fun ensureLibraryPlaylists() {
+        if (_libraryPlaylists.value.isNotEmpty() || client.playlistHits.isNotEmpty()) {
+            if (_libraryPlaylists.value.isEmpty()) _libraryPlaylists.value = client.playlistHits
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { client.loadLibraryPlaylists() }
+            }.onSuccess { hits ->
+                client.playlistHits = hits
+                _libraryPlaylists.value = hits
+            }
+        }
+    }
+    fun addHitsToPlaylist(playlist: YoutubeHit, hits: List<YoutubeHit>) {
+        val playlistId = YoutubeClient.playlistIdFromUrl(playlist.url)
+        val videoIds = hits.map { YoutubeClient.videoIdFromUrl(it.url) }.filter { it.length == 11 }
+        if (playlistId.isBlank() || videoIds.isEmpty()) {
+            _uiState.update { it.copy(error = "Couldn't add those songs to the playlist.") }
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { client.addVideosToPlaylist(playlistId, videoIds) }
+            }.onSuccess {
+                _notices.emit("Added ${videoIds.size} to ${playlist.title}")
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(error = error.message ?: "Couldn't add songs to that playlist")
+                }
+            }
+        }
+    }
+
+    fun createPlaylistAndAdd(title: String, hits: List<YoutubeHit>) {
+        val videoIds = hits.map { YoutubeClient.videoIdFromUrl(it.url) }.filter { it.length == 11 }
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val id = client.createPlaylist(title, videoIds)
+                    client.loadLibraryPlaylists()
+                    id
+                }
+            }.onSuccess {
+                val refreshed = runCatching {
+                    withContext(Dispatchers.IO) { client.loadLibraryPlaylists() }
+                }.getOrDefault(client.playlistHits)
+                client.playlistHits = refreshed
+                _libraryPlaylists.value = refreshed
+                _notices.emit("Created $title")
+                if (_uiState.value.section == YoutubeSection.PLAYLISTS) loadPlaylists(refreshing = true)
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(error = error.message ?: "Couldn't create the playlist")
+                }
+            }
+        }
     }
 
     fun toggleSave(hit: YoutubeHit) {
@@ -253,6 +374,7 @@ class YoutubeViewModel @Inject constructor(
         client.likedHits = emptyList()
         client.feedShelves = emptyList()
         client.playlistHits = emptyList()
+        _libraryPlaylists.value = emptyList()
         client.radioHits = emptyList()
     }
 
@@ -512,6 +634,7 @@ class YoutubeViewModel @Inject constructor(
             loaded.fold(
                 onSuccess = { hits ->
                     client.playlistHits = hits
+                    _libraryPlaylists.value = hits
                     _uiState.update { it.copy(isLoading = false, isRefreshing = false, results = hits) }
                 },
                 onFailure = { error ->
