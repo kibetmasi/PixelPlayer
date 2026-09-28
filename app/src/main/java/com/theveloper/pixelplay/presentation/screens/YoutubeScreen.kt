@@ -43,8 +43,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.AutoGraph
 import androidx.compose.material.icons.rounded.AccountCircle
-import androidx.compose.material.icons.rounded.Bookmark
-import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Close
@@ -151,10 +149,8 @@ fun YoutubeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val liked by viewModel.likedTracks.collectAsStateWithLifecycle()
-    val saved by viewModel.savedTracks.collectAsStateWithLifecycle()
     val recent by viewModel.recentTracks.collectAsStateWithLifecycle()
     val likedIds by viewModel.likedSongIds.collectAsStateWithLifecycle()
-    val savedIds by viewModel.savedSongIds.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -195,7 +191,6 @@ fun YoutubeScreen(
         YoutubeSection.HOME -> stringResource(R.string.youtube_home_title)
         YoutubeSection.SEARCH -> stringResource(R.string.youtube_search_title)
         YoutubeSection.LIKED -> stringResource(R.string.youtube_liked_title)
-        YoutubeSection.SAVED -> stringResource(R.string.youtube_saved_title)
         YoutubeSection.PLAYLISTS -> stringResource(R.string.youtube_playlists_title)
         YoutubeSection.RADIO -> stringResource(R.string.youtube_radio_title)
     }
@@ -207,7 +202,6 @@ fun YoutubeScreen(
         } else {
             uiState.results.ifEmpty { liked }
         }
-        YoutubeSection.SAVED -> saved
         else -> uiState.results
     }
     val listState = rememberLazyListState()
@@ -619,7 +613,6 @@ fun YoutubeScreen(
                                     YoutubeSection.HOME -> stringResource(
                                         if (uiState.collectionTitle != null) R.string.youtube_playlist_empty else R.string.youtube_home_empty,
                                     )
-                                    YoutubeSection.SAVED -> stringResource(R.string.youtube_saved_empty)
                                 }
                             )
                             if (browseSection == YoutubeSection.LIKED && !account.isSignedIn) {
@@ -681,14 +674,12 @@ fun YoutubeScreen(
                                     isPlaying = isPlaying && currentSongId == song.id,
                                     isCurrent = currentSongId == song.id,
                                     liked = song.id in likedIds || viewModel.isLiked(hit),
-                                    saved = song.id in savedIds,
                                     selecting = selecting,
                                     selected = selectedUrls.indexOf(hit.url).let { if (it >= 0) it + 1 else null },
                                     onPlay = { onSongClick(hit, browseSection == YoutubeSection.RADIO) },
                                     onLongPress = { onSongLongPress(hit) },
                                     onActions = { onSongActions(hit) },
                                     onLike = { viewModel.toggleLike(hit) },
-                                    onSave = { viewModel.toggleSave(hit) },
                                 )
                             }
                             if (uiState.isLoadingMore) {
@@ -1125,14 +1116,12 @@ private fun YoutubeTrackRow(
     isPlaying: Boolean,
     isCurrent: Boolean,
     liked: Boolean,
-    saved: Boolean,
     selecting: Boolean,
     selected: Int?,
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
     onActions: () -> Unit,
     onLike: () -> Unit,
-    onSave: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         EnhancedSongListItem(
@@ -1157,13 +1146,6 @@ private fun YoutubeTrackRow(
                     imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     contentDescription = stringResource(if (liked) R.string.youtube_unlike else R.string.youtube_like),
                     tint = if (liked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onSave) {
-                Icon(
-                    imageVector = if (saved) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
-                    contentDescription = stringResource(if (saved) R.string.youtube_unsave else R.string.youtube_save),
-                    tint = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

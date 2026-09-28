@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Bookmark
-import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Pause
@@ -77,8 +75,6 @@ internal fun MiniPlayerContentInternal(
     onNext: () -> Unit,
     soundCloudLiked: Boolean = false,
     onSoundCloudLike: (() -> Unit)? = null,
-    youtubeSaved: Boolean = false,
-    onYoutubeSave: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     canScroll: Boolean = true
 ) {
@@ -179,46 +175,14 @@ internal fun MiniPlayerContentInternal(
                     imageVector = if (soundCloudLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     contentDescription = stringResource(
                         when {
-                            onYoutubeSave != null && soundCloudLiked -> R.string.youtube_unlike
-                            onYoutubeSave != null -> R.string.youtube_like
+                            song.id.startsWith("yt_") && soundCloudLiked -> R.string.youtube_unlike
+                            song.id.startsWith("yt_") -> R.string.youtube_like
                             soundCloudLiked -> R.string.soundcloud_unlike
                             else -> R.string.soundcloud_like
                         },
                     ),
                     tint = if (soundCloudLiked) {
                         LocalMaterialTheme.current.error
-                    } else {
-                        LocalMaterialTheme.current.onPrimaryContainer
-                    },
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-        }
-
-        if (onYoutubeSave != null) {
-            val saveInteraction = remember(song.id) { MutableInteractionSource() }
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = saveInteraction,
-                        indication = miniPlayerIndication,
-                        enabled = controlsEnabled,
-                    ) {
-                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onYoutubeSave()
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = if (youtubeSaved) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
-                    contentDescription = stringResource(
-                        if (youtubeSaved) R.string.youtube_unsave else R.string.youtube_save,
-                    ),
-                    tint = if (youtubeSaved) {
-                        LocalMaterialTheme.current.primary
                     } else {
                         LocalMaterialTheme.current.onPrimaryContainer
                     },

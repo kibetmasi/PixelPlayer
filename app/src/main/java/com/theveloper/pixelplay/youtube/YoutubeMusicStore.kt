@@ -12,7 +12,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Liked and saved YouTube Music tracks. These lists are not device files.
+ * Liked YouTube Music tracks. These lists are not device files.
  */
 @Singleton
 class YoutubeMusicStore @Inject constructor(
@@ -20,16 +20,12 @@ class YoutubeMusicStore @Inject constructor(
 ) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val _liked = MutableStateFlow(read(KEY_LIKED))
-    private val _saved = MutableStateFlow(read(KEY_SAVED))
     private val _recent = MutableStateFlow(read(KEY_RECENT))
     private val _likedSongIds = MutableStateFlow(idsOf(_liked.value))
-    private val _savedSongIds = MutableStateFlow(idsOf(_saved.value))
 
     val liked: StateFlow<List<YoutubeHit>> = _liked.asStateFlow()
-    val saved: StateFlow<List<YoutubeHit>> = _saved.asStateFlow()
     val recent: StateFlow<List<YoutubeHit>> = _recent.asStateFlow()
     val likedSongIds: StateFlow<Set<String>> = _likedSongIds.asStateFlow()
-    val savedSongIds: StateFlow<Set<String>> = _savedSongIds.asStateFlow()
 
     fun toggleLike(hit: YoutubeHit) {
         _liked.value = toggle(_liked.value, hit)
@@ -37,18 +33,8 @@ class YoutubeMusicStore @Inject constructor(
         persist(KEY_LIKED, _liked.value)
     }
 
-    fun toggleSave(hit: YoutubeHit) {
-        _saved.value = toggle(_saved.value, hit)
-        _savedSongIds.value = idsOf(_saved.value)
-        persist(KEY_SAVED, _saved.value)
-    }
-
     fun toggleLike(song: Song) {
         hitFromSong(song)?.let(::toggleLike)
-    }
-
-    fun toggleSave(song: Song) {
-        hitFromSong(song)?.let(::toggleSave)
     }
 
     fun rememberRecent(hit: YoutubeHit) {
@@ -131,7 +117,6 @@ class YoutubeMusicStore @Inject constructor(
     companion object {
         private const val PREFS = "youtube_music"
         private const val KEY_LIKED = "liked"
-        private const val KEY_SAVED = "saved"
         private const val KEY_RECENT = "recent"
         private const val MAX_TRACKS = 200
         private const val MAX_RECENT = 24

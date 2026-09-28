@@ -127,7 +127,6 @@ internal fun BoxScope.UnifiedPlayerMiniAndFullLayers(
                     val soundCloudPrefs = hiltViewModel<SoundCloudPrefsViewModel>()
                     val likedPermalinks by soundCloudPrefs.likedPermalinks.collectAsStateWithLifecycle()
                     val soundCloudPermalink = soundCloudPrefs.permalinkFor(currentSongNonNull.id)
-                    val youtubeSavedIds by playerViewModel.youtubeSavedSongIds.collectAsStateWithLifecycle()
                     val youtubeLiked by playerViewModel.isCurrentSongFavorite.collectAsStateWithLifecycle()
                     val isYoutubeSong = currentSongNonNull.id.startsWith("yt_")
                     val context = LocalContext.current
@@ -158,12 +157,6 @@ internal fun BoxScope.UnifiedPlayerMiniAndFullLayers(
                                     }
                                 }
                             }
-                        },
-                        youtubeSaved = currentSongNonNull.id in youtubeSavedIds,
-                        onYoutubeSave = if (isYoutubeSong) {
-                            { playerViewModel.toggleYoutubeSave() }
-                        } else {
-                            null
                         },
                         canScroll = isMiniPlayerVisible && infrequentPlayerState.isPlaying,
                         modifier = Modifier.fillMaxSize()

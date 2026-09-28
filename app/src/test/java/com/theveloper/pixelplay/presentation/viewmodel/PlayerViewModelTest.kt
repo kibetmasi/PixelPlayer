@@ -170,7 +170,6 @@ class PlayerViewModelTest {
         every { mockLibraryStateHolder.currentFavoriteSortOption } returns MutableStateFlow<SortOption>(SortOption.LikedSongTitleAZ)
         every { mockLibraryStateHolder.currentStorageFilter } returns MutableStateFlow(StorageFilter.ALL)
         every { mockYoutubeMusicStore.likedSongIds } returns MutableStateFlow(emptySet())
-        every { mockYoutubeMusicStore.savedSongIds } returns MutableStateFlow(emptySet())
 
         every { mockSearchStateHolder.searchHistory } returns _searchHistoryFlow
         every { mockSearchStateHolder.searchResults } returns _searchResultsFlow

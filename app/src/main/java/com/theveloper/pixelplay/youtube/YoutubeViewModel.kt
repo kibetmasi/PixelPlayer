@@ -47,10 +47,8 @@ class YoutubeViewModel @Inject constructor(
     private val _libraryPlaylists = MutableStateFlow<List<YoutubeHit>>(emptyList())
     val libraryPlaylists: StateFlow<List<YoutubeHit>> = _libraryPlaylists.asStateFlow()
     val likedTracks: StateFlow<List<YoutubeHit>> = musicStore.liked
-    val savedTracks: StateFlow<List<YoutubeHit>> = musicStore.saved
     val recentTracks: StateFlow<List<YoutubeHit>> = musicStore.recent
     val likedSongIds: StateFlow<Set<String>> = musicStore.likedSongIds
-    val savedSongIds: StateFlow<Set<String>> = musicStore.savedSongIds
     val account: StateFlow<YoutubeAccount> = session.account
     private var searchJob: Job? = null
     private var likedJob: Job? = null
@@ -76,7 +74,6 @@ class YoutubeViewModel @Inject constructor(
             val hasContent = when (section) {
                 YoutubeSection.HOME -> current.shelves.isNotEmpty()
                 YoutubeSection.SEARCH -> current.query.trim().length < 2 || current.results.isNotEmpty()
-                YoutubeSection.SAVED -> true
                 else -> current.results.isNotEmpty()
             }
             if (hasContent) return
@@ -125,7 +122,6 @@ class YoutubeViewModel @Inject constructor(
                 }
                 loadRadioStations(refreshing = client.radioHits.isNotEmpty())
             }
-            YoutubeSection.SAVED -> _uiState.update { it.copy(results = emptyList(), shelves = emptyList(), isLoading = false) }
         }
     }
 
@@ -158,7 +154,6 @@ class YoutubeViewModel @Inject constructor(
             YoutubeSection.LIKED -> loadLiked(refreshing = true)
             YoutubeSection.PLAYLISTS -> loadPlaylists(refreshing = true)
             YoutubeSection.RADIO -> loadRadioStations(refreshing = true)
-            YoutubeSection.SAVED -> Unit
         }
     }
 
@@ -329,10 +324,6 @@ class YoutubeViewModel @Inject constructor(
                 }
             }
         }
-    }
-
-    fun toggleSave(hit: YoutubeHit) {
-        musicStore.toggleSave(hit)
     }
 
     fun rememberPlayed(song: Song) {

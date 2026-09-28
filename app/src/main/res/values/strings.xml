@@ -24,14 +24,10 @@
     <string name="youtube_playlists_title">Playlists</string>
     <string name="youtube_search_title">Search</string>
     <string name="youtube_liked_title">Liked</string>
-    <string name="youtube_saved_title">Saved</string>
     <string name="youtube_chip_home">Home</string>
     <string name="youtube_chip_liked">Liked</string>
-    <string name="youtube_chip_saved">Saved</string>
     <string name="youtube_like">Like</string>
     <string name="youtube_unlike">Unlike</string>
-    <string name="youtube_save">Save</string>
-    <string name="youtube_unsave">Remove save</string>
     <string name="youtube_search_placeholder">Songs, albums, playlists</string>
     <string name="youtube_clear_search">Clear search</string>
     <string name="youtube_filter_songs">Songs</string>
@@ -43,7 +39,6 @@
     <string name="youtube_sign_out">Sign out</string>
     <string name="youtube_sign_in_done">Done</string>
     <string name="youtube_sign_in_incomplete">Finish signing in, then tap Done.</string>
-    <string name="youtube_saved_empty">Saved songs show up here.</string>
     <string name="youtube_search_empty">Search YouTube Music.</string>
     <string name="youtube_home_empty">The feed is unavailable right now.</string>
     <string name="youtube_playlist_empty">This playlist did not return any tracks.</string>

@@ -1202,8 +1202,6 @@ class PlayerViewModel @Inject constructor(
         .getFavoriteSongIdsFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
-    val youtubeSavedSongIds: StateFlow<Set<String>> = youtubeMusicStore.savedSongIds
-
     val isCurrentSongFavorite: StateFlow<Boolean> = combine(
         stablePlayerState
             .map { it.currentSong }
@@ -2303,13 +2301,6 @@ class PlayerViewModel @Inject constructor(
             val favoriteSongId = resolveFavoriteSongId(currentSong) ?: return@launch
             val currentlyFavorite = favoriteSongIds.value.contains(favoriteSongId)
             setFavoriteStatusEverywhere(favoriteSongId, !currentlyFavorite)
-        }
-    }
-
-    fun toggleYoutubeSave() {
-        val currentSong = playbackStateHolder.stablePlayerState.value.currentSong ?: return
-        if (currentSong.id.startsWith("yt_")) {
-            youtubeMusicStore.toggleSave(currentSong)
         }
     }
 

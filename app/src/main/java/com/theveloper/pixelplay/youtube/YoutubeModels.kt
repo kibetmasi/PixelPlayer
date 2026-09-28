@@ -4,7 +4,6 @@ enum class YoutubeSection {
     HOME,
     SEARCH,
     LIKED,
-    SAVED,
     PLAYLISTS,
     RADIO,
 }
