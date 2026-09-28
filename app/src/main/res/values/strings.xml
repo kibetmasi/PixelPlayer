@@ -18,6 +18,7 @@
 
     <string name="youtube_home_title">Feed</string>
     <string name="youtube_recent_title">Recently played</string>
+    <string name="youtube_feed_stats_subtitle">Plays, time, and top tracks</string>
     <string name="youtube_home_subtitle">Trending, radio, and playlists</string>
     <string name="youtube_radio_title">Radio</string>
     <string name="youtube_playlists_title">Playlists</string>

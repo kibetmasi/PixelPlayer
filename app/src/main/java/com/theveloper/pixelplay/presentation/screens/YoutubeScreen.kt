@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -40,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.AutoGraph
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
@@ -62,6 +64,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LargeExtendedFloatingActionButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -478,7 +481,23 @@ fun YoutubeScreen(
                                 LoadingIndicator()
                             }
                         } else if (uiState.shelves.isEmpty() && recent.isEmpty()) {
-                            EmptyYoutubeState(message = stringResource(R.string.youtube_home_empty))
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(contentPadding),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    EmptyYoutubeState(message = stringResource(R.string.youtube_home_empty))
+                                }
+                                FeedListeningStatsButton(
+                                    onClick = { navController.navigateSafely(Screen.Stats.route) },
+                                )
+                            }
                         } else {
                             val mixHits = uiState.shelves
                                 .firstOrNull { it.id == "yours" }
@@ -569,6 +588,11 @@ fun YoutubeScreen(
                                             )
                                         }
                                     }
+                                }
+                                item(key = "listening_stats") {
+                                    FeedListeningStatsButton(
+                                        onClick = { navController.navigateSafely(Screen.Stats.route) },
+                                    )
                                 }
                             }
                         }
@@ -1223,6 +1247,53 @@ private fun YoutubeTile(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = GoogleSansRounded,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeedListeningStatsButton(onClick: () -> Unit) {
+    val shape = AbsoluteSmoothCornerShape(
+        cornerRadiusTL = 32.dp,
+        smoothnessAsPercentTR = 60,
+        cornerRadiusBR = 32.dp,
+        smoothnessAsPercentTL = 60,
+        cornerRadiusBL = 32.dp,
+        smoothnessAsPercentBR = 60,
+        cornerRadiusTR = 32.dp,
+        smoothnessAsPercentBL = 60,
+    )
+    LargeExtendedFloatingActionButton(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 20.dp, bottom = 8.dp)
+            .heightIn(min = 72.dp),
+        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = shape,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.AutoGraph,
+            contentDescription = null,
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.stats_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = GoogleSansRounded,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = stringResource(R.string.youtube_feed_stats_subtitle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
                 fontFamily = GoogleSansRounded,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
