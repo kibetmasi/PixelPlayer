@@ -27,6 +27,7 @@ class YoutubeMusicStore @Inject constructor(
     val recent: StateFlow<List<YoutubeHit>> = _recent.asStateFlow()
     val likedSongIds: StateFlow<Set<String>> = _likedSongIds.asStateFlow()
     private val catalog = LinkedHashMap<String, CatalogTrack>()
+    private val creditLookups = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val _catalogVersion = MutableStateFlow(0)
     val catalogVersion: StateFlow<Int> = _catalogVersion.asStateFlow()
 
@@ -75,6 +76,7 @@ class YoutubeMusicStore @Inject constructor(
                             artist = artist,
                             album = album,
                             artworkUrl = hit.thumbnailUrl,
+                            videoId = YoutubeClient.videoIdFromUrl(hit.url),
                         )
                     )
                 ) {
@@ -86,7 +88,14 @@ class YoutubeMusicStore @Inject constructor(
         if (changed) _catalogVersion.value += 1
     }
 
-    fun rememberPlayback(songId: String, title: String, artist: String, album: String, artworkUrl: String?) {
+    fun rememberPlayback(
+        songId: String,
+        title: String,
+        artist: String,
+        album: String,
+        artworkUrl: String?,
+        videoId: String = "",
+    ) {
         val id = songId.trim()
         if (!id.startsWith("yt_") || title.isBlank()) return
         val changed = synchronized(catalog) {
@@ -97,12 +106,44 @@ class YoutubeMusicStore @Inject constructor(
                     artist = cleanName(artist),
                     album = cleanAlbum(album),
                     artworkUrl = artworkUrl,
+                    videoId = videoId.trim(),
                 )
             )
             if (updated) persistCatalog()
             updated
         }
         if (changed) _catalogVersion.value += 1
+    }
+
+    fun creditGaps(playedSongIds: Set<String>, limit: Int): List<CatalogCreditGap> {
+        if (playedSongIds.isEmpty() || limit <= 0) return emptyList()
+        return synchronized(catalog) {
+            catalog.values.asSequence()
+                .filter { track ->
+                    track.songId in playedSongIds &&
+                        track.videoId.length == 11 &&
+                        track.videoId !in creditLookups &&
+                        (track.artist.isBlank() || track.album.isBlank())
+                }
+                .take(limit)
+                .map { track ->
+                    CatalogCreditGap(
+                        songId = track.songId,
+                        title = track.title,
+                        artist = track.artist,
+                        album = track.album,
+                        artworkUrl = track.artworkUrl,
+                        videoId = track.videoId,
+                    )
+                }
+                .toList()
+        }
+    }
+
+    fun claimCreditLookup(videoId: String): Boolean = creditLookups.add(videoId)
+
+    fun releaseCreditLookup(videoId: String) {
+        creditLookups.remove(videoId)
     }
 
     fun songsForStats(): List<Song> {
@@ -124,7 +165,7 @@ class YoutubeMusicStore @Inject constructor(
         return YoutubeHit(
             url = url,
             title = song.title.ifBlank { "Unknown title" },
-            artist = song.displayArtist.ifBlank { "YouTube Music" },
+            artist = song.displayArtist,
             durationSec = song.duration.coerceAtLeast(0L) / 1000L,
             thumbnailUrl = song.albumArtUriString,
             kind = YoutubeHit.Kind.TRACK,
@@ -168,7 +209,7 @@ class YoutubeMusicStore @Inject constructor(
                     YoutubeHit(
                         url = url,
                         title = item.optString("title").ifBlank { "Unknown title" },
-                        artist = item.optString("artist").ifBlank { "YouTube Music" },
+                        artist = item.optString("artist"),
                         durationSec = item.optLong("durationSec"),
                         thumbnailUrl = item.optString("thumbnailUrl").ifBlank { null },
                         kind = YoutubeHit.Kind.TRACK,
@@ -202,6 +243,7 @@ class YoutubeMusicStore @Inject constructor(
                     .put("artist", track.artist)
                     .put("album", track.album)
                     .put("artworkUrl", track.artworkUrl ?: "")
+                    .put("videoId", track.videoId)
             )
         }
         prefs.edit().putString(KEY_CATALOG, array.toString()).apply()
@@ -221,9 +263,10 @@ class YoutubeMusicStore @Inject constructor(
                         CatalogTrack(
                             songId = songId,
                             title = title,
-                            artist = item.optString("artist"),
-                            album = item.optString("album"),
+                            artist = cleanName(item.optString("artist")),
+                            album = cleanAlbum(item.optString("album")),
                             artworkUrl = item.optString("artworkUrl").ifBlank { null },
+                            videoId = item.optString("videoId"),
                         )
                     )
                 }
@@ -242,8 +285,10 @@ class YoutubeMusicStore @Inject constructor(
     }
 
     private fun cleanName(value: String): String {
-        val trimmed = value.trim()
-        if (trimmed.isBlank() || trimmed.equals("Unknown Artist", ignoreCase = true)) return ""
+        val trimmed = value.trim().removeSuffix(" - Topic").trim()
+        if (trimmed.isBlank()) return ""
+        if (trimmed.equals("Unknown Artist", ignoreCase = true)) return ""
+        if (trimmed.equals("YouTube Music", ignoreCase = true)) return ""
         return trimmed
     }
 
@@ -263,28 +308,30 @@ class YoutubeMusicStore @Inject constructor(
         val artist: String,
         val album: String,
         val artworkUrl: String?,
+        val videoId: String = "",
     ) {
         fun merge(incoming: CatalogTrack): CatalogTrack = copy(
             title = incoming.title.ifBlank { title },
             artist = incoming.artist.ifBlank { artist },
             album = incoming.album.ifBlank { album },
             artworkUrl = incoming.artworkUrl ?: artworkUrl,
+            videoId = incoming.videoId.ifBlank { videoId },
         )
 
         fun toSong(): Song = Song(
             id = songId,
             title = title,
-            artist = artist.ifBlank { "YouTube Music" },
+            artist = artist,
             artistId = -1L,
             artists = emptyList(),
-            album = album.ifBlank { "YouTube Music" },
+            album = album,
             albumId = -1L,
             albumArtist = artist.ifBlank { null },
             path = "",
             contentUriString = "",
             albumArtUriString = artworkUrl,
             duration = 0L,
-            genre = "YouTube Music",
+            genre = null,
             mimeType = null,
             bitrate = null,
             sampleRate = null,
@@ -302,3 +349,12 @@ class YoutubeMusicStore @Inject constructor(
         private val DURATION = Regex("""^\d+:\d{2}(?::\d{2})?$""")
     }
 }
+
+data class CatalogCreditGap(
+    val songId: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val artworkUrl: String?,
+    val videoId: String,
+)

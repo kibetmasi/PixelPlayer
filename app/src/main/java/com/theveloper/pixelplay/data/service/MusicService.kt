@@ -417,13 +417,41 @@ class MusicService : MediaLibraryService() {
         val metadata = item.mediaMetadata
         val title = metadata.title?.toString()?.trim().orEmpty()
         if (title.isBlank()) return
+        val artist = metadata.artist?.toString().orEmpty()
+        val album = metadata.albumTitle?.toString().orEmpty()
+        val artworkUrl = metadata.artworkUri?.toString()
+        val videoId = metadata.extras
+            ?.getString(com.theveloper.pixelplay.youtube.YoutubeClient.EXTRA_WATCH_URL)
+            ?.let(com.theveloper.pixelplay.youtube.YoutubeClient::videoIdFromUrl)
+            .orEmpty()
         youtubeMusicStore.rememberPlayback(
             songId = songId,
             title = title,
-            artist = metadata.artist?.toString().orEmpty(),
-            album = metadata.albumTitle?.toString().orEmpty(),
-            artworkUrl = metadata.artworkUri?.toString(),
+            artist = artist,
+            album = album,
+            artworkUrl = artworkUrl,
+            videoId = videoId,
         )
+        val missingCredit = artist.isBlank() || album.isBlank() ||
+            artist.equals("YouTube Music", ignoreCase = true) ||
+            album.equals("YouTube Music", ignoreCase = true)
+        if (missingCredit && videoId.length == 11 && youtubeMusicStore.claimCreditLookup(videoId)) {
+            appScope.launch(Dispatchers.IO) {
+                val credits = runCatching { youtubeClient.creditsFor(videoId) }.getOrNull()
+                if (credits == null) {
+                    youtubeMusicStore.releaseCreditLookup(videoId)
+                    return@launch
+                }
+                youtubeMusicStore.rememberPlayback(
+                    songId = songId,
+                    title = title,
+                    artist = credits.artist.ifBlank { artist },
+                    album = credits.album.ifBlank { album },
+                    artworkUrl = artworkUrl,
+                    videoId = videoId,
+                )
+            }
+        }
     }
 
     override fun onCreate() {

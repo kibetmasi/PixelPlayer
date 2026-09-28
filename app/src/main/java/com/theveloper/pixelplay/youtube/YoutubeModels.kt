@@ -47,4 +47,10 @@ data class YoutubeResolvedTrack(
     val streamUrl: String,
     val mimeType: String?,
     val artworkUrl: String?,
+    val album: String = "",
+)
+
+data class YoutubeCredits(
+    val artist: String,
+    val album: String,
 )

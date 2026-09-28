@@ -8,6 +8,7 @@ import com.theveloper.pixelplay.data.stats.PlaybackStatsRepository
 import com.theveloper.pixelplay.data.stats.PlaybackStatsRepository.PlaybackStatsSummary
 import com.theveloper.pixelplay.data.stats.StatsTimeRange
 import com.theveloper.pixelplay.data.stats.mergeStatsSongs
+import com.theveloper.pixelplay.youtube.YoutubeClient
 import com.theveloper.pixelplay.youtube.YoutubeMusicStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -27,6 +28,7 @@ class StatsViewModel @Inject constructor(
     private val playbackStatsRepository: PlaybackStatsRepository,
     private val musicRepository: MusicRepository,
     private val youtubeMusicStore: YoutubeMusicStore,
+    private val youtubeClient: YoutubeClient,
 ) : ViewModel() {
 
     data class StatsUiState(
@@ -52,6 +54,7 @@ class StatsViewModel @Inject constructor(
     init {
         observeYoutubeCatalog()
         observeStatsRefreshFlow()
+        enrichYoutubeCredits()
         refreshRange(
             range = StatsTimeRange.WEEK,
             showLoading = true,
@@ -162,6 +165,21 @@ class StatsViewModel @Inject constructor(
         }
     }
 
+    private fun enrichYoutubeCredits() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val played = playbackStatsRepository.exportEventsForBackup()
+                    .asSequence()
+                    .map { it.songId }
+                    .filter { it.startsWith("yt_") }
+                    .toSet()
+                youtubeClient.fillPlayedCredits(youtubeMusicStore, played)
+            }.onFailure { throwable ->
+                Timber.e(throwable, "Failed to load YouTube artist and album names")
+            }
+        }
+    }
+
     fun requestStatsRefresh() {
         playbackStatsRepository.requestRefresh()
     }
@@ -176,6 +194,7 @@ class StatsViewModel @Inject constructor(
             youtubeMusicStore.catalogVersion
                 .drop(1)
                 .collectLatest {
+                    enrichYoutubeCredits()
                     val selectedRange = _uiState.value.selectedRange
                     refreshRange(
                         range = selectedRange,
