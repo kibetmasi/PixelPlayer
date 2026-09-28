@@ -994,7 +994,7 @@ suspend fun markDirectoryRulesVersionApplied(version: Int) {
     }
 
     val carouselStyleFlow: Flow<String> =
-        pref { it[PreferencesKeys.CAROUSEL_STYLE] ?: CarouselStyle.NO_PEEK }
+        pref { it[PreferencesKeys.CAROUSEL_STYLE] ?: CarouselStyle.ONE_PEEK }
 
     suspend fun setCarouselStyle(style: String) {
         dataStore.edit { it[PreferencesKeys.CAROUSEL_STYLE] = style }

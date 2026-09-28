@@ -111,7 +111,6 @@ import com.theveloper.pixelplay.presentation.navigation.navigateSafely
 import com.theveloper.pixelplay.presentation.components.AlbumArtCollage
 import com.theveloper.pixelplay.presentation.components.BetaInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.ChangelogModalSheet
-import com.theveloper.pixelplay.presentation.components.PlaylistPeekCarousel
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.youtube.auth.YoutubeLoginActivity
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
@@ -539,16 +538,6 @@ fun YoutubeScreen(
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             LoadingIndicator()
                         }
-                    }
-                    browseSection == YoutubeSection.PLAYLISTS &&
-                        uiState.collectionTitle == null &&
-                        rows.isNotEmpty() -> {
-                        PlaylistPeekCarousel(
-                            playlists = rows,
-                            onPlaylistClick = { onSongClick(it, false) },
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = contentPadding,
-                        )
                     }
                     rows.isEmpty() -> {
                         Column(

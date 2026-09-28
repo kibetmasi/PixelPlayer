@@ -488,7 +488,7 @@ class PlayerViewModel @Inject constructor(
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = CarouselStyle.NO_PEEK
+            initialValue = CarouselStyle.ONE_PEEK
         )
 
     val hasActiveAiProviderApiKey: StateFlow<Boolean> = combine(
@@ -1330,7 +1330,7 @@ class PlayerViewModel @Inject constructor(
     data class PlayerConfigSlice(
         val navBarCornerRadius: Int = 32,
         val navBarStyle: String = NavBarStyle.DEFAULT,
-        val carouselStyle: String = CarouselStyle.NO_PEEK,
+        val carouselStyle: String = CarouselStyle.ONE_PEEK,
         val fullPlayerLoadingTweaks: FullPlayerLoadingTweaks = FullPlayerLoadingTweaks(),
         val tapBackgroundClosesPlayer: Boolean = false,
         val useSmoothCorners: Boolean = true,
