@@ -332,10 +332,20 @@ object MediaItemBuilder {
             putInt(EXTERNAL_EXTRA_SAMPLE_RATE, song.sampleRate ?: 0)
             putString(EXTERNAL_EXTRA_FILE_PATH, song.path)
             song.navidromeId?.let { putString(EXTERNAL_EXTRA_NAVIDROME_ID, it) }
+            youtubeWatchUrlForSong(song)?.let { watchUrl ->
+                putString(YoutubeClient.EXTRA_WATCH_URL, watchUrl)
+            }
         }
 
         metadataBuilder.setExtras(extras)
         return metadataBuilder.build()
+    }
+
+    private fun youtubeWatchUrlForSong(song: Song): String? {
+        YoutubeClient.watchUrlForSongId(song.id)?.let { return it }
+        val candidate = song.contentUriString.takeIf { it.startsWith("http") }
+            ?: song.path.takeIf { it.startsWith("http") }
+        return candidate?.takeIf { YoutubeClient.videoIdFromUrl(it).length == 11 }
     }
 
     private fun normalizeArtworkUri(

@@ -67,6 +67,8 @@
     <string name="youtube_cancel">Cancel</string>
     <string name="youtube_selected_count">%1$d selected</string>
     <string name="youtube_add_to_playlist_empty">No playlists in your library yet.</string>
+    <string name="youtube_play_next">Play next</string>
+    <string name="youtube_select">Select</string>
     <string name="youtube_back">Back</string>
 
     <!-- SoundCloud -->

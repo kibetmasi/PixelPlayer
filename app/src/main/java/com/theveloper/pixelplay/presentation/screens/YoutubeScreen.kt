@@ -10,6 +10,7 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -96,15 +98,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
+import com.theveloper.pixelplay.presentation.components.MultiSelectionBottomSheet
 import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
+import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
 import androidx.navigation.NavController
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
@@ -117,6 +122,7 @@ import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import com.theveloper.pixelplay.youtube.YoutubeClient
 import com.theveloper.pixelplay.youtube.YoutubeHit
+import com.theveloper.pixelplay.youtube.YoutubePlaybackQueue
 import com.theveloper.pixelplay.youtube.YoutubeSearchFilter
 import com.theveloper.pixelplay.youtube.YoutubeSection
 import com.theveloper.pixelplay.youtube.YoutubeViewModel
@@ -150,6 +156,7 @@ fun YoutubeScreen(
     var selectedUrls by remember { mutableStateOf(setOf<String>()) }
     var showAddToPlaylist by remember { mutableStateOf(false) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
+    var showMultiSelectionSheet by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     val libraryPlaylists by viewModel.libraryPlaylists.collectAsStateWithLifecycle()
     val stablePlayer by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
@@ -269,30 +276,34 @@ fun YoutubeScreen(
                         runCatching { viewModel.radioTracks(hit) }
                             .onSuccess { queue ->
                                 val playable = queue.ifEmpty { listOf(hit) }
+                                val queued = viewModel.songsFromContext(playable.first(), playable)
                                 val start = viewModel.resolvePlayable(playable.first())
                                 playerViewModel.playSongs(
-                                    songsToPlay = listOf(start),
+                                    songsToPlay = listOf(start) + queued.drop(1),
                                     startSong = start,
                                     queueName = "YouTube Radio",
                                 )
-                                viewModel.prefetchAfter(playable.first(), playable) { queued ->
-                                    playerViewModel.addSongToQueue(queued)
-                                }
+                                viewModel.warmUpTracks(playable)
                             }
                             .onFailure { error ->
                                 viewModel.reportError(error.message ?: "Couldn't start radio")
                             }
                     } else {
-                        runCatching { viewModel.resolvePlayable(hit) }
-                            .onSuccess { song ->
+                        runCatching {
+                            val contextHits = YoutubePlaybackQueue.remainingTracks(hit, rows)
+                            val queued = contextHits.map(viewModel::listSong)
+                            val start = viewModel.resolvePlayable(hit)
+                            start to (listOf(start) + queued.drop(1))
+                        }
+                            .onSuccess { (start, songs) ->
                                 playerViewModel.playSongs(
-                                    songsToPlay = listOf(song),
-                                    startSong = song,
-                                    queueName = "YouTube Music",
+                                    songsToPlay = songs,
+                                    startSong = start,
+                                    queueName = uiState.collectionTitle ?: "YouTube Music",
                                 )
-                                viewModel.prefetchAfter(hit, rows) { queued ->
-                                    playerViewModel.addSongToQueue(queued)
-                                }
+                                viewModel.warmUpTracks(
+                                    YoutubePlaybackQueue.remainingTracks(hit, rows),
+                                )
                             }
                             .onFailure { error ->
                                 viewModel.reportError(error.message ?: "Couldn't play this track")
@@ -309,7 +320,10 @@ fun YoutubeScreen(
     val onSongClick: (YoutubeHit, Boolean) -> Unit = { hit, asRadio ->
         if (selecting && hit.kind == YoutubeHit.Kind.TRACK) {
             selectedUrls = if (hit.url in selectedUrls) selectedUrls - hit.url else selectedUrls + hit.url
-            if (selectedUrls.isEmpty()) selecting = false
+            if (selectedUrls.isEmpty()) {
+                selecting = false
+                showMultiSelectionSheet = false
+            }
         } else {
             playHit(hit, asRadio)
         }
@@ -318,8 +332,18 @@ fun YoutubeScreen(
         if (hit.kind == YoutubeHit.Kind.TRACK) {
             selecting = true
             selectedUrls = selectedUrls + hit.url
+            showMultiSelectionSheet = true
             viewModel.ensureLibraryPlaylists()
         }
+    }
+    val selectedHits = remember(selectedUrls, rows) {
+        rows.filter { it.url in selectedUrls && it.kind == YoutubeHit.Kind.TRACK }
+    }
+    val selectedSongs = remember(selectedHits) { selectedHits.map(viewModel::listSong) }
+    fun clearYoutubeSelection() {
+        selecting = false
+        selectedUrls = emptySet()
+        showMultiSelectionSheet = false
     }
 
     val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
@@ -344,45 +368,19 @@ fun YoutubeScreen(
                 onChangelog = { showChangelog = true },
                 onAccount = { navController.navigateSafely(Screen.YoutubeSettings.route) },
                 onSettings = { navController.navigateSafely(Screen.Settings.route) },
-            )
-        },
-        bottomBar = {
-            if (selecting) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    tonalElevation = 4.dp,
+                onCreatePlaylist = if (
+                    browseSection == YoutubeSection.PLAYLISTS &&
+                    uiState.collectionTitle == null &&
+                    account.isSignedIn
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.youtube_selected_count, selectedUrls.size),
-                            modifier = Modifier.weight(1f),
-                            fontFamily = GoogleSansRounded,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        TextButton(onClick = {
-                            selecting = false
-                            selectedUrls = emptySet()
-                        }) {
-                            Text(stringResource(R.string.youtube_cancel))
-                        }
-                        Button(
-                            onClick = {
-                                viewModel.ensureLibraryPlaylists()
-                                showAddToPlaylist = true
-                            },
-                            enabled = selectedUrls.isNotEmpty() && account.isSignedIn,
-                        ) {
-                            Text(stringResource(R.string.youtube_add_to_playlist))
-                        }
+                    {
+                        selectedUrls = emptySet()
+                        showCreatePlaylist = true
                     }
-                }
-            }
+                } else {
+                    null
+                },
+            )
         },
     ) { innerPadding ->
         Column(
@@ -405,6 +403,7 @@ fun YoutubeScreen(
                 smoothnessAsPercentBR = 60,
             ),
         ) {
+        Box(Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = uiState.isRefreshing,
             onRefresh = viewModel::refresh,
@@ -638,6 +637,17 @@ fun YoutubeScreen(
                 }
             }
         }
+        if (selecting && selectedUrls.isNotEmpty()) {
+            SelectionCountPill(
+                selectedCount = selectedUrls.size,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = MiniPlayerHeight + 16.dp)
+                    .zIndex(2f)
+                    .clickable { showMultiSelectionSheet = true },
+            )
+        }
+        }
         }
         }
     }
@@ -731,6 +741,59 @@ fun YoutubeScreen(
             },
         )
     }
+    if (showMultiSelectionSheet && selectedSongs.isNotEmpty()) {
+        MultiSelectionBottomSheet(
+            selectedSongs = selectedSongs,
+            favoriteSongIds = likedIds + selectedHits.filter(viewModel::isLiked).map {
+                YoutubeClient.songIdForUrl(it.url)
+            }.toSet(),
+            onDismiss = { showMultiSelectionSheet = false },
+            onPlayAll = {
+                playerViewModel.playSongs(
+                    songsToPlay = selectedSongs,
+                    startSong = selectedSongs.first(),
+                    queueName = uiState.collectionTitle ?: "YouTube Music",
+                )
+                clearYoutubeSelection()
+            },
+            onAddToQueue = {
+                playerViewModel.addSelectedToQueue(selectedSongs)
+                clearYoutubeSelection()
+            },
+            onPlayNext = {
+                playerViewModel.addSelectedAsNext(selectedSongs)
+                clearYoutubeSelection()
+            },
+            onAddToPlaylist = {
+                viewModel.ensureLibraryPlaylists()
+                showAddToPlaylist = true
+                showMultiSelectionSheet = false
+            },
+            onToggleLikeAll = { shouldLike ->
+                selectedHits.forEach { hit ->
+                    if (viewModel.isLiked(hit) != shouldLike) viewModel.toggleLike(hit)
+                }
+                showMultiSelectionSheet = false
+            },
+            onShareAll = {
+                val text = selectedHits.joinToString("\n") { it.url }
+                context.startActivity(
+                    Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, text)
+                        },
+                        selectedHits.first().title,
+                    )
+                )
+                showMultiSelectionSheet = false
+            },
+            onDeleteAll = { _, onResult -> onResult(false) },
+            onBatchEdit = { showMultiSelectionSheet = false },
+            showBatchEdit = false,
+            showDelete = false,
+        )
+    }
 }
 
 @Composable
@@ -749,6 +812,7 @@ private fun YoutubeCompactHeader(
     onChangelog: () -> Unit,
     onAccount: () -> Unit,
     onSettings: () -> Unit,
+    onCreatePlaylist: (() -> Unit)? = null,
 ) {
     val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
     Column(Modifier.fillMaxWidth().background(headerColor)) {
@@ -794,6 +858,14 @@ private fun YoutubeCompactHeader(
                 )
             } else {
                 Spacer(Modifier.weight(1f))
+            }
+            if (onCreatePlaylist != null) {
+                FilledIconButton(onClick = onCreatePlaylist) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = stringResource(R.string.youtube_new_playlist),
+                    )
+                }
             }
             FilledIconButton(onClick = onAccount) {
                 Icon(

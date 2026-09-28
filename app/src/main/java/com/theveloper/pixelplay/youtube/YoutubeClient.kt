@@ -504,6 +504,19 @@ class YoutubeClient @Inject constructor(
             collectVideoHits(root, hits, limit)
             return
         }
+        addResponsiveListHits(rows, hits, limit)
+    }
+
+    private fun collectPlaylistShelf(root: JSONObject, hits: MutableSet<YoutubeHit>, limit: Int) {
+        val rows = findPlaylistRows(root)
+        if (rows == null) {
+            collectVideoHits(root, hits, limit)
+            return
+        }
+        addResponsiveListHits(rows, hits, limit)
+    }
+
+    private fun addResponsiveListHits(rows: JSONArray, hits: MutableSet<YoutubeHit>, limit: Int) {
         for (index in 0 until rows.length()) {
             if (hits.size >= limit) return
             val item = rows.optJSONObject(index) ?: continue
@@ -521,6 +534,44 @@ class YoutubeClient @Inject constructor(
                 kind = YoutubeHit.Kind.TRACK,
             )
         }
+    }
+
+    /** Playlist pages only: the playlist shelf, not related mixes below it. */
+    private fun findPlaylistRows(root: JSONObject): JSONArray? {
+        root.optJSONObject("contents")
+            ?.optJSONObject("twoColumnBrowseResultsRenderer")
+            ?.optJSONObject("secondaryContents")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.let { contents -> firstPlaylistShelfContents(contents) }
+            ?.let { return it }
+
+        root.optJSONObject("contents")
+            ?.optJSONObject("singleColumnBrowseResultsRenderer")
+            ?.optJSONArray("tabs")
+            ?.optJSONObject(0)
+            ?.optJSONObject("tabRenderer")
+            ?.optJSONObject("content")
+            ?.optJSONObject("sectionListRenderer")
+            ?.optJSONArray("contents")
+            ?.let { contents -> firstPlaylistShelfContents(contents) }
+            ?.let { return it }
+
+        return root.optJSONObject("continuationContents")
+            ?.optJSONObject("musicPlaylistShelfContinuation")
+            ?.optJSONArray("contents")
+    }
+
+    private fun firstPlaylistShelfContents(sections: JSONArray): JSONArray? {
+        for (index in 0 until sections.length()) {
+            val section = sections.optJSONObject(index) ?: continue
+            section.optJSONObject("musicPlaylistShelfRenderer")?.optJSONArray("contents")?.let { return it }
+        }
+        for (index in 0 until sections.length()) {
+            val section = sections.optJSONObject(index) ?: continue
+            section.optJSONObject("musicShelfRenderer")?.optJSONArray("contents")?.let { return it }
+        }
+        return null
     }
 
     /** Desktop two-column Liked Music, mobile single-column, or a continuation page. */
@@ -629,7 +680,7 @@ class YoutubeClient @Inject constructor(
                 continuation = token,
             )
             first = false
-            collectLikedShelf(root, hits, limit)
+            collectPlaylistShelf(root, hits, limit)
             token = findPlaylistContinuation(root)
             requests++
             if (hits.size == before) break

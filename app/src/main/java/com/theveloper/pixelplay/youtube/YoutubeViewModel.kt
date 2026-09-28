@@ -524,6 +524,12 @@ class YoutubeViewModel @Inject constructor(
         }
     }
 
+    fun songsFromContext(start: YoutubeHit, source: List<YoutubeHit>): List<Song> {
+        return YoutubePlaybackQueue.remainingTracks(start, source).map(client::listSong)
+    }
+
+    fun listSong(hit: YoutubeHit): Song = client.listSong(hit)
+
     fun prefetchAfter(start: YoutubeHit, queue: List<YoutubeHit>, onSong: (Song) -> Unit) {
         val startIndex = queue.indexOfFirst { it.url == start.url }
         if (startIndex < 0) return
