@@ -10,7 +10,6 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,9 +49,11 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DockedSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -89,6 +90,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -109,6 +112,7 @@ import com.theveloper.pixelplay.presentation.components.MultiSelectionBottomShee
 import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
+import com.theveloper.pixelplay.presentation.components.subcomps.SelectionActionRow
 import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
 import androidx.navigation.NavController
 import com.theveloper.pixelplay.presentation.navigation.Screen
@@ -150,10 +154,11 @@ fun YoutubeScreen(
     val savedIds by viewModel.savedSongIds.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     var showChangelog by remember { mutableStateOf(false) }
     var showBeta by remember { mutableStateOf(false) }
     var selecting by remember { mutableStateOf(false) }
-    var selectedUrls by remember { mutableStateOf(setOf<String>()) }
+    var selectedUrls by remember { mutableStateOf(listOf<String>()) }
     var showAddToPlaylist by remember { mutableStateOf(false) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
     var showMultiSelectionSheet by remember { mutableStateOf(false) }
@@ -172,7 +177,7 @@ fun YoutubeScreen(
         start = 16.dp,
         end = 16.dp,
         top = 8.dp,
-        bottom = bottomBarHeight + MiniPlayerHeight + 30.dp,
+        bottom = bottomBarHeight + MiniPlayerHeight + 30.dp + if (selecting) 72.dp else 0.dp,
     )
     val currentSongId = stablePlayer.currentSong?.id
     val isPlaying = stablePlayer.isPlaying
@@ -252,7 +257,8 @@ fun YoutubeScreen(
     if (selecting) {
         BackHandler {
             selecting = false
-            selectedUrls = emptySet()
+            selectedUrls = emptyList()
+            showMultiSelectionSheet = false
         }
     }
 
@@ -318,31 +324,48 @@ fun YoutubeScreen(
     }
 
     val onSongClick: (YoutubeHit, Boolean) -> Unit = { hit, asRadio ->
-        if (selecting && hit.kind == YoutubeHit.Kind.TRACK) {
-            selectedUrls = if (hit.url in selectedUrls) selectedUrls - hit.url else selectedUrls + hit.url
-            if (selectedUrls.isEmpty()) {
-                selecting = false
-                showMultiSelectionSheet = false
+        if (selecting) {
+            if (hit.isSelectableTrack()) {
+                selectedUrls = selectedUrls.toggleUrl(hit.url)
+                if (selectedUrls.isEmpty()) {
+                    selecting = false
+                    showMultiSelectionSheet = false
+                }
             }
         } else {
             playHit(hit, asRadio)
         }
     }
     val onSongLongPress: (YoutubeHit) -> Unit = { hit ->
-        if (hit.kind == YoutubeHit.Kind.TRACK) {
+        if (hit.isSelectableTrack()) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             selecting = true
-            selectedUrls = selectedUrls + hit.url
+            selectedUrls = selectedUrls.toggleUrl(hit.url)
+            if (selectedUrls.isEmpty()) {
+                selecting = false
+                showMultiSelectionSheet = false
+            }
+            viewModel.ensureLibraryPlaylists()
+        }
+    }
+    val onSongActions: (YoutubeHit) -> Unit = { hit ->
+        if (hit.isSelectableTrack()) {
+            selecting = true
+            selectedUrls = listOf(hit.url)
             showMultiSelectionSheet = true
             viewModel.ensureLibraryPlaylists()
         }
     }
     val selectedHits = remember(selectedUrls, rows) {
-        rows.filter { it.url in selectedUrls && it.kind == YoutubeHit.Kind.TRACK }
+        selectedUrls.mapNotNull { url ->
+            rows.firstOrNull { it.url == url && it.isSelectableTrack() }
+        }
     }
     val selectedSongs = remember(selectedHits) { selectedHits.map(viewModel::listSong) }
+    val canSelectTracks = rows.any { it.isSelectableTrack() }
     fun clearYoutubeSelection() {
         selecting = false
-        selectedUrls = emptySet()
+        selectedUrls = emptyList()
         showMultiSelectionSheet = false
     }
 
@@ -362,7 +385,13 @@ fun YoutubeScreen(
                 searchFocusRequester = searchFocusRequester,
                 searchFilter = uiState.filter,
                 onFilter = viewModel::setFilter,
-                onBack = if (uiState.collectionTitle != null) viewModel::closeCollection else null,
+                onBack = when {
+                    selecting -> {
+                        { clearYoutubeSelection() }
+                    }
+                    uiState.collectionTitle != null -> viewModel::closeCollection
+                    else -> null
+                },
                 signedIn = account.isSignedIn,
                 onBeta = { showBeta = true },
                 onChangelog = { showChangelog = true },
@@ -374,9 +403,14 @@ fun YoutubeScreen(
                     account.isSignedIn
                 ) {
                     {
-                        selectedUrls = emptySet()
+                        selectedUrls = emptyList()
                         showCreatePlaylist = true
                     }
+                } else {
+                    null
+                },
+                onSelectTracks = if (canSelectTracks && !selecting) {
+                    { selecting = true }
                 } else {
                     null
                 },
@@ -474,7 +508,10 @@ fun YoutubeScreen(
                                                     modifier = Modifier.width(168.dp),
                                                     isCurrent = currentSongId == YoutubeClient.songIdForUrl(hit.url),
                                                     isPlaying = isPlaying,
+                                                    selecting = selecting,
+                                                    selected = hit.url in selectedUrls,
                                                     onClick = { onSongClick(hit, false) },
+                                                    onLongPress = { onSongLongPress(hit) },
                                                 )
                                             }
                                         }
@@ -525,7 +562,10 @@ fun YoutubeScreen(
                                                 } else {
                                                     hit.artist
                                                 },
+                                                selecting = selecting,
+                                                selected = hit.url in selectedUrls,
                                                 onClick = { onSongClick(hit, shelf.startsRadio) },
+                                                onLongPress = { onSongLongPress(hit) },
                                             )
                                         }
                                     }
@@ -570,7 +610,10 @@ fun YoutubeScreen(
                             }
                         }
                     }
-                    isWideScreen && rows.any { it.kind == YoutubeHit.Kind.COLLECTION || browseSection == YoutubeSection.HOME } -> {
+                    isWideScreen &&
+                        uiState.collectionTitle == null &&
+                        (browseSection == YoutubeSection.HOME ||
+                            rows.any { it.kind == YoutubeHit.Kind.COLLECTION }) -> {
                         val columns = if (configuration.screenWidthDp >= 840) 4 else 3
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(columns),
@@ -583,7 +626,10 @@ fun YoutubeScreen(
                                     hit = hit,
                                     isCurrent = currentSongId == YoutubeClient.songIdForUrl(hit.url),
                                     isPlaying = isPlaying,
+                                    selecting = selecting,
+                                    selected = hit.url in selectedUrls,
                                     onClick = { onSongClick(hit, browseSection == YoutubeSection.RADIO) },
+                                    onLongPress = { onSongLongPress(hit) },
                                 )
                             }
                         }
@@ -613,9 +659,10 @@ fun YoutubeScreen(
                                     liked = song.id in likedIds || viewModel.isLiked(hit),
                                     saved = song.id in savedIds,
                                     selecting = selecting,
-                                    selected = hit.url in selectedUrls,
+                                    selected = selectedUrls.indexOf(hit.url).let { if (it >= 0) it + 1 else null },
                                     onPlay = { onSongClick(hit, browseSection == YoutubeSection.RADIO) },
                                     onLongPress = { onSongLongPress(hit) },
+                                    onActions = { onSongActions(hit) },
                                     onLike = { viewModel.toggleLike(hit) },
                                     onSave = { viewModel.toggleSave(hit) },
                                 )
@@ -637,15 +684,44 @@ fun YoutubeScreen(
                 }
             }
         }
-        if (selecting && selectedUrls.isNotEmpty()) {
+        if (selecting) {
             SelectionCountPill(
                 selectedCount = selectedUrls.size,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = MiniPlayerHeight + 16.dp)
-                    .zIndex(2f)
-                    .clickable { showMultiSelectionSheet = true },
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp)
+                    .zIndex(2f),
             )
+            Card(
+                shape = AbsoluteSmoothCornerShape(28.dp, 60),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        bottom = MiniPlayerHeight + 16.dp,
+                    )
+                    .zIndex(2f),
+            ) {
+                SelectionActionRow(
+                    selectedCount = selectedUrls.size,
+                    onSelectAll = {
+                        selectedUrls = rows.filter { it.isSelectableTrack() }.map { it.url }
+                    },
+                    onDeselect = { clearYoutubeSelection() },
+                    onOptionsClick = {
+                        if (selectedHits.isNotEmpty()) {
+                            showMultiSelectionSheet = true
+                            viewModel.ensureLibraryPlaylists()
+                        }
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+            }
         }
         }
         }
@@ -689,7 +765,7 @@ fun YoutubeScreen(
                                 viewModel.addHitsToPlaylist(playlist, chosen)
                                 showAddToPlaylist = false
                                 selecting = false
-                                selectedUrls = emptySet()
+                                selectedUrls = emptyList()
                             },
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             shape = RoundedCornerShape(16.dp),
@@ -727,7 +803,7 @@ fun YoutubeScreen(
                         newPlaylistName = ""
                         showCreatePlaylist = false
                         selecting = false
-                        selectedUrls = emptySet()
+                        selectedUrls = emptyList()
                     },
                     enabled = newPlaylistName.trim().isNotEmpty(),
                 ) {
@@ -749,11 +825,15 @@ fun YoutubeScreen(
             }.toSet(),
             onDismiss = { showMultiSelectionSheet = false },
             onPlayAll = {
-                playerViewModel.playSongs(
-                    songsToPlay = selectedSongs,
-                    startSong = selectedSongs.first(),
-                    queueName = uiState.collectionTitle ?: "YouTube Music",
-                )
+                if (selectedHits.size == 1) {
+                    playHit(selectedHits.first(), browseSection == YoutubeSection.RADIO)
+                } else {
+                    playerViewModel.playSongs(
+                        songsToPlay = selectedSongs,
+                        startSong = selectedSongs.first(),
+                        queueName = uiState.collectionTitle ?: "YouTube Music",
+                    )
+                }
                 clearYoutubeSelection()
             },
             onAddToQueue = {
@@ -813,6 +893,7 @@ private fun YoutubeCompactHeader(
     onAccount: () -> Unit,
     onSettings: () -> Unit,
     onCreatePlaylist: (() -> Unit)? = null,
+    onSelectTracks: (() -> Unit)? = null,
 ) {
     val headerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
     Column(Modifier.fillMaxWidth().background(headerColor)) {
@@ -858,6 +939,14 @@ private fun YoutubeCompactHeader(
                 )
             } else {
                 Spacer(Modifier.weight(1f))
+            }
+            if (onSelectTracks != null) {
+                FilledIconButton(onClick = onSelectTracks) {
+                    Icon(
+                        imageVector = Icons.Rounded.SelectAll,
+                        contentDescription = stringResource(R.string.youtube_select),
+                    )
+                }
             }
             if (onCreatePlaylist != null) {
                 FilledIconButton(onClick = onCreatePlaylist) {
@@ -1014,16 +1103,14 @@ private fun YoutubeTrackRow(
     liked: Boolean,
     saved: Boolean,
     selecting: Boolean,
-    selected: Boolean,
+    selected: Int?,
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
+    onActions: () -> Unit,
     onLike: () -> Unit,
     onSave: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        if (selecting) {
-            Checkbox(checked = selected, onCheckedChange = { onPlay() })
-        }
         EnhancedSongListItem(
             modifier = Modifier
                 .weight(1f)
@@ -1031,23 +1118,30 @@ private fun YoutubeTrackRow(
             song = song,
             isPlaying = isPlaying,
             isCurrentSong = isCurrent,
-            showMoreOptionsButton = false,
-            onMoreOptionsClick = {},
+            isSelected = selected != null,
+            selectionIndex = selected,
+            isSelectionMode = selecting,
+            showMoreOptionsButton = !selecting,
+            handleGestures = false,
+            onLongPress = onLongPress,
+            onMoreOptionsClick = { onActions() },
             onClick = onPlay,
         )
-        IconButton(onClick = onLike) {
-            Icon(
-                imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                contentDescription = stringResource(if (liked) R.string.youtube_unlike else R.string.youtube_like),
-                tint = if (liked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onSave) {
-            Icon(
-                imageVector = if (saved) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
-                contentDescription = stringResource(if (saved) R.string.youtube_unsave else R.string.youtube_save),
-                tint = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        if (!selecting) {
+            IconButton(onClick = onLike) {
+                Icon(
+                    imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = stringResource(if (liked) R.string.youtube_unlike else R.string.youtube_like),
+                    tint = if (liked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onSave) {
+                Icon(
+                    imageVector = if (saved) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
+                    contentDescription = stringResource(if (saved) R.string.youtube_unsave else R.string.youtube_save),
+                    tint = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -1059,16 +1153,22 @@ private fun YoutubeTile(
     isPlaying: Boolean,
     subtitle: String = hit.artist,
     modifier: Modifier = Modifier,
+    selecting: Boolean = false,
+    selected: Boolean = false,
     onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
 ) {
+    val selectable = hit.isSelectableTrack()
     Surface(
-        onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = { if (selectable) onLongPress() },
+        ),
         shape = RoundedCornerShape(24.dp),
-        color = if (isCurrent) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerLow
+        color = when {
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            isCurrent -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surfaceContainerLow
         },
     ) {
         Column(Modifier.padding(10.dp)) {
@@ -1082,7 +1182,26 @@ private fun YoutubeTile(
                         .clip(RoundedCornerShape(18.dp)),
                     contentScale = ContentScale.Crop,
                 )
-                if (isCurrent && isPlaying) {
+                if (selecting && selectable) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(
+                                MaterialTheme.colorScheme.primary.copy(
+                                    alpha = if (selected) 0.45f else 0.18f,
+                                ),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (selected) {
+                            Icon(
+                                imageVector = Icons.Rounded.SelectAll,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        }
+                    }
+                } else if (isCurrent && isPlaying) {
                     PlayingEqIcon(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -1096,7 +1215,7 @@ private fun YoutubeTile(
             Text(
                 text = hit.title,
                 fontFamily = GoogleSansRounded,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1156,3 +1275,8 @@ private fun placeholderSong(hit: YoutubeHit): Song {
         sampleRate = null,
     )
 }
+
+private fun YoutubeHit.isSelectableTrack(): Boolean = kind == YoutubeHit.Kind.TRACK
+
+private fun List<String>.toggleUrl(url: String): List<String> =
+    if (url in this) this - url else this + url

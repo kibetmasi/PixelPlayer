@@ -277,7 +277,13 @@ fun MultiSelectionBottomSheet(
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 TightWrapText(
-                                    text = stringResource(R.string.song_info_action_play_all),
+                                    text = stringResource(
+                                        if (selectedSongs.size <= 1) {
+                                            R.string.song_info_action_play
+                                        } else {
+                                            R.string.song_info_action_play_all
+                                        }
+                                    ),
                                     modifier = Modifier.padding(end = 4.dp),
                                     overflow = TextOverflow.Ellipsis,
                                     maxLines = 2,
