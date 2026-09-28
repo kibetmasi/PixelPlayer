@@ -249,6 +249,140 @@ class YoutubeClient @Inject constructor(
         return raw.replace("\\/", "/").replace("\\u003d", "=").replace("\\u0026", "&")
     }
 
+    /**
+     * Artist and album for one video, from YouTube Music's watch-next panel.
+     * Shelf rows often only carry the artist, so playback and stats call this
+     * when the album is still missing.
+     */
+    fun creditsFor(videoId: String): YoutubeCredits {
+        val id = videoId.trim()
+        if (id.length != 11) return YoutubeCredits("", "")
+        applySession()
+        val body = JSONObject()
+            .put("context", JSONObject(musicContext()))
+            .put("videoId", id)
+            .put("playlistId", "RDAMVM$id")
+        val root = musicPost("next", body.toString())
+        val panels = mutableListOf<JSONObject>()
+        collectCreditRenderers(root, panels)
+        val match = panels.firstOrNull { renderer ->
+            renderer.optString("videoId") == id || firstVideoId(renderer) == id
+        } ?: panels.firstOrNull() ?: return YoutubeCredits("", "")
+        val (artist, album) = creditsFrom(match)
+        return YoutubeCredits(artist, album)
+    }
+
+    fun fillPlayedCredits(store: YoutubeMusicStore, playedSongIds: Set<String>, limit: Int = 40) {
+        if (playedSongIds.isEmpty()) return
+        store.creditGaps(playedSongIds, limit).forEach { gap ->
+            if (!store.claimCreditLookup(gap.videoId)) return@forEach
+            val credits = runCatching { creditsFor(gap.videoId) }.getOrNull()
+            if (credits == null) {
+                store.releaseCreditLookup(gap.videoId)
+                return@forEach
+            }
+            val artist = credits.artist.ifBlank { gap.artist }
+            val album = credits.album.ifBlank { gap.album }
+            if (artist == gap.artist && album == gap.album) return@forEach
+            store.rememberPlayback(
+                songId = gap.songId,
+                title = gap.title,
+                artist = artist,
+                album = album,
+                artworkUrl = gap.artworkUrl,
+                videoId = gap.videoId,
+            )
+        }
+    }
+
+    private fun collectCreditRenderers(node: Any?, found: MutableList<JSONObject>) {
+        when (node) {
+            is JSONObject -> {
+                node.optJSONObject("playlistPanelVideoRenderer")?.let { found += it }
+                node.optJSONObject("musicResponsiveListItemRenderer")?.let { found += it }
+                val keys = node.keys()
+                while (keys.hasNext()) collectCreditRenderers(node.opt(keys.next()), found)
+            }
+            is JSONArray -> {
+                for (index in 0 until node.length()) collectCreditRenderers(node.opt(index), found)
+            }
+        }
+    }
+
+    private fun creditsFrom(renderer: JSONObject): Pair<String, String> {
+        val runs = buildList {
+            addAll(textRuns(renderer.optJSONObject("longBylineText")))
+            addAll(textRuns(renderer.optJSONObject("shortBylineText")))
+            addAll(textRuns(renderer.optJSONObject("subtitle")))
+            addAll(textRuns(renderer.optJSONObject("secondSubtitle")))
+            val flex = renderer.optJSONArray("flexColumns") ?: return@buildList
+            for (index in 1 until flex.length()) {
+                val text = flex.optJSONObject(index)
+                    ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.optJSONObject("text")
+                val parsed = textRuns(text)
+                if (parsed.isNotEmpty()) addAll(parsed) else addAll(splitCreditRuns(jsonText(text)))
+            }
+        }
+        return pickCredits(runs)
+    }
+
+    private fun splitCredits(value: String): Pair<String, String> = pickCredits(splitCreditRuns(value))
+
+    private fun splitCreditRuns(value: String): List<Pair<String, String>> =
+        value.split('•', '·')
+            .map { it.trim() to "" }
+            .filter { it.first.isNotBlank() }
+
+    private fun textRuns(node: JSONObject?): List<Pair<String, String>> {
+        if (node == null) return emptyList()
+        val runs = node.optJSONArray("runs")
+        if (runs == null) return splitCreditRuns(node.optString("simpleText"))
+        return buildList {
+            for (index in 0 until runs.length()) {
+                val run = runs.optJSONObject(index) ?: continue
+                val text = run.optString("text").trim()
+                if (text.isBlank() || text == "•" || text == "·") continue
+                val browseId = run.optJSONObject("navigationEndpoint")
+                    ?.optJSONObject("browseEndpoint")
+                    ?.optString("browseId")
+                    .orEmpty()
+                if (browseId.isEmpty() && (text.contains('•') || text.contains('·'))) {
+                    addAll(splitCreditRuns(text))
+                } else {
+                    add(text to browseId)
+                }
+            }
+        }
+    }
+
+    private fun pickCredits(runs: List<Pair<String, String>>): Pair<String, String> {
+        val useful = runs.filter { (text, _) -> isCreditLabel(text) }
+        val artist = useful.firstOrNull { it.second.startsWith("UC") }?.first
+            ?: useful.firstOrNull()?.first
+            .orEmpty()
+            .removeSuffix(" - Topic")
+            .trim()
+        val album = useful.firstOrNull { it.second.startsWith("MPRE") }?.first
+            ?: useful.firstOrNull { (text, id) ->
+                !text.equals(artist, ignoreCase = true) && !id.startsWith("UC")
+            }?.first
+            .orEmpty()
+        return artist to album
+    }
+
+    private fun isCreditLabel(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return false
+        if (trimmed.equals("YouTube Music", ignoreCase = true)) return false
+        if (trimmed.equals("Song", ignoreCase = true)) return false
+        if (trimmed.equals("Single", ignoreCase = true)) return false
+        if (trimmed.equals("EP", ignoreCase = true)) return false
+        if (trimmed.contains("view", ignoreCase = true)) return false
+        if (CREDIT_DURATION.matches(trimmed) || CREDIT_YEAR.matches(trimmed)) return false
+        return true
+    }
+
     private fun musicBrowse(
         browseId: String? = null,
         continuation: String? = null,
@@ -366,7 +500,7 @@ class YoutubeClient @Inject constructor(
                 return YoutubeHit(
                     url = "https://music.youtube.com/playlist?list=$playlistId",
                     title = title,
-                    artist = subtitle.ifBlank { "YouTube Music" },
+                    artist = subtitle,
                     durationSec = 0,
                     thumbnailUrl = thumbnail,
                     kind = YoutubeHit.Kind.COLLECTION,
@@ -374,14 +508,16 @@ class YoutubeClient @Inject constructor(
             }
             if (videoId.length == 11) {
                 val isMix = isRadioMix(playlistId)
+                val (artist, album) = if (isMix) subtitle to "" else splitCredits(subtitle)
                 return YoutubeHit(
                     url = if (isMix) "https://www.youtube.com/watch?v=$videoId&list=$playlistId"
                     else "https://music.youtube.com/watch?v=$videoId",
                     title = title,
-                    artist = subtitle.ifBlank { "YouTube Music" },
+                    artist = artist,
                     durationSec = 0,
                     thumbnailUrl = if (isMix) thumbnail else fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
                     kind = if (isMix) YoutubeHit.Kind.COLLECTION else YoutubeHit.Kind.TRACK,
+                    album = album,
                 )
             }
         }
@@ -391,7 +527,7 @@ class YoutubeClient @Inject constructor(
                 return YoutubeHit(
                     url = "https://music.youtube.com/playlist?list=$playlistId",
                     title = title,
-                    artist = subtitle.ifBlank { "YouTube Music" },
+                    artist = subtitle,
                     durationSec = 0,
                     thumbnailUrl = thumbnail,
                     kind = YoutubeHit.Kind.COLLECTION,
@@ -414,7 +550,7 @@ class YoutubeClient @Inject constructor(
         return YoutubeHit(
             url = "https://music.youtube.com/playlist?list=$playlistId",
             title = title,
-            artist = subtitle.ifBlank { "YouTube Music" },
+            artist = subtitle,
             durationSec = 0,
             thumbnailUrl = thumbnail,
             kind = YoutubeHit.Kind.COLLECTION,
@@ -430,13 +566,15 @@ class YoutubeClient @Inject constructor(
                 renderer.optJSONObject("navigationEndpoint")?.optJSONObject("watchEndpoint")?.optString("videoId").orEmpty()
             }
         if (videoId.length == 11) {
+            val (artist, album) = creditsFrom(renderer)
             return YoutubeHit(
                 url = "https://music.youtube.com/watch?v=$videoId",
                 title = title,
-                artist = flexColumnText(renderer, 1).ifBlank { "YouTube Music" },
+                artist = artist,
                 durationSec = 0,
                 thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
                 kind = YoutubeHit.Kind.TRACK,
+                album = album,
             )
         }
         val browseId = renderer.optJSONObject("navigationEndpoint")
@@ -449,7 +587,7 @@ class YoutubeClient @Inject constructor(
         return YoutubeHit(
             url = "https://music.youtube.com/playlist?list=$playlistId",
             title = title,
-            artist = flexColumnText(renderer, 1).ifBlank { "YouTube Music" },
+            artist = flexColumnText(renderer, 1),
             durationSec = 0,
             thumbnailUrl = lastThumbnail(
                 renderer.optJSONObject("thumbnail")?.optJSONObject("musicThumbnailRenderer")?.optJSONObject("thumbnail"),
@@ -525,13 +663,15 @@ class YoutubeClient @Inject constructor(
             val videoId = renderer.optJSONObject("playlistItemData")?.optString("videoId").orEmpty()
             val title = flexColumnText(renderer, 0)
             if (videoId.length != 11 || title.isBlank()) continue
+            val (artist, album) = creditsFrom(renderer)
             hits += YoutubeHit(
                 url = "https://music.youtube.com/watch?v=$videoId",
                 title = title,
-                artist = flexColumnText(renderer, 1).ifBlank { "YouTube Music" },
+                artist = artist,
                 durationSec = 0,
                 thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
                 kind = YoutubeHit.Kind.TRACK,
+                album = album,
             )
         }
     }
@@ -765,14 +905,23 @@ class YoutubeClient @Inject constructor(
         val info = StreamInfo.getInfo(youtube(), key)
         val stream = pickBestAudioStream(info.audioStreams)
             ?: throw IllegalStateException("No playable audio stream for this track.")
+        val videoId = videoIdFromUrl(info.url.orEmpty()).ifBlank { videoIdFromUrl(key) }
+        val credits = if (videoId.length == 11) {
+            runCatching { creditsFor(videoId) }.getOrDefault(YoutubeCredits("", ""))
+        } else {
+            YoutubeCredits("", "")
+        }
         val resolved = YoutubeResolvedTrack(
             watchUrl = info.url.orEmpty().ifBlank { key },
             title = info.name.orEmpty().ifBlank { "Unknown title" },
-            artist = info.uploaderName.orEmpty().ifBlank { "Unknown artist" },
+            artist = credits.artist.ifBlank {
+                info.uploaderName.orEmpty().removeSuffix(" - Topic").trim()
+            },
             durationMs = info.duration.coerceAtLeast(0L) * 1000L,
             streamUrl = stream.content,
             mimeType = stream.format?.mimeType,
             artworkUrl = fullBleedArtwork(info.thumbnails.maxByOrNull { it.height }?.url),
+            album = credits.album,
         )
         resolveCache[key] = CachedResolve(resolved, System.currentTimeMillis())
         return resolved
@@ -792,14 +941,14 @@ class YoutubeClient @Inject constructor(
             artist = track.artist,
             artistId = -1L,
             artists = emptyList(),
-            album = "YouTube Music",
+            album = track.album,
             albumId = -1L,
             albumArtist = track.artist,
             path = track.streamUrl,
             contentUriString = track.streamUrl,
             albumArtUriString = track.artworkUrl,
             duration = track.durationMs,
-            genre = "YouTube Music",
+            genre = null,
             mimeType = track.mimeType,
             bitrate = null,
             sampleRate = null,
@@ -815,14 +964,14 @@ class YoutubeClient @Inject constructor(
             artist = hit.artist,
             artistId = -1L,
             artists = emptyList(),
-            album = "YouTube Music",
+            album = hit.album,
             albumId = -1L,
             albumArtist = hit.artist,
             path = hit.url,
             contentUriString = hit.url,
             albumArtUriString = hit.thumbnailUrl,
             duration = hit.durationSec.coerceAtLeast(0L) * 1000L,
-            genre = "YouTube Music",
+            genre = null,
             mimeType = null,
             bitrate = null,
             sampleRate = null,
@@ -863,19 +1012,19 @@ class YoutubeClient @Inject constructor(
                     if (node.has("flexColumns")) firstVideoId(node.optJSONObject("overlay")) else ""
                 }
                 if (videoId.length == 11 && looksLikeTrack(node)) {
-                    val title = videoTitle(node).ifBlank { "YouTube Music" }
-                    hits += YoutubeHit(
-                        url = "https://music.youtube.com/watch?v=$videoId",
-                        title = title,
-                        artist = jsonText(node.optJSONObject("longBylineText"))
-                            .ifBlank { jsonText(node.optJSONObject("shortBylineText")) }
-                            .ifBlank { jsonText(node.optJSONObject("ownerText")) }
-                            .ifBlank { flexColumnText(node, 1) }
-                            .ifBlank { "YouTube Music" },
-                        durationSec = 0,
-                        thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
-                        kind = YoutubeHit.Kind.TRACK,
-                    )
+                    val title = videoTitle(node)
+                    if (title.isNotBlank()) {
+                        val (artist, album) = creditsFrom(node)
+                        hits += YoutubeHit(
+                            url = "https://music.youtube.com/watch?v=$videoId",
+                            title = title,
+                            artist = artist,
+                            durationSec = 0,
+                            thumbnailUrl = fullBleedArtwork("https://i.ytimg.com/vi/$videoId/hq720.jpg"),
+                            kind = YoutubeHit.Kind.TRACK,
+                            album = album,
+                        )
+                    }
                 }
                 val keys = node.keys()
                 while (keys.hasNext() && hits.size < limit) {
@@ -1020,7 +1169,7 @@ class YoutubeClient @Inject constructor(
         is StreamInfoItem -> YoutubeHit(
             url = url.orEmpty(),
             title = name.orEmpty().ifBlank { "Unknown title" },
-            artist = uploaderName.orEmpty().ifBlank { "YouTube Music" },
+            artist = uploaderName.orEmpty().removeSuffix(" - Topic").trim(),
             durationSec = duration.coerceAtLeast(0L),
             thumbnailUrl = fullBleedArtwork(thumbnails.maxByOrNull { it.height }?.url),
             kind = YoutubeHit.Kind.TRACK,
@@ -1028,7 +1177,7 @@ class YoutubeClient @Inject constructor(
         is PlaylistInfoItem -> YoutubeHit(
             url = url.orEmpty(),
             title = name.orEmpty().ifBlank { "Playlist" },
-            artist = uploaderName.orEmpty().ifBlank { "YouTube Music" },
+            artist = uploaderName.orEmpty().removeSuffix(" - Topic").trim(),
             durationSec = 0L,
             thumbnailUrl = fullBleedArtwork(thumbnails.maxByOrNull { it.height }?.url),
             kind = YoutubeHit.Kind.COLLECTION,
@@ -1071,6 +1220,8 @@ class YoutubeClient @Inject constructor(
         const val LIKED_PAGE_SIZE = 40
         private const val MAX_REQUESTS_PER_PAGE = 1
         private val VISITOR_REGEX = Regex("^Cg[ts]")
+        private val CREDIT_DURATION = Regex("""^\d+:\d{2}(?::\d{2})?$""")
+        private val CREDIT_YEAR = Regex("""^\d{4}$""")
 
         fun rememberWatchUrl(songId: String, watchUrl: String) {
             val id = songId.trim()

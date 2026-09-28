@@ -28,6 +28,7 @@ data class YoutubeHit(
     val durationSec: Long,
     val thumbnailUrl: String?,
     val kind: Kind,
+    val album: String = "",
 ) {
     enum class Kind { TRACK, COLLECTION }
 }
@@ -46,4 +47,10 @@ data class YoutubeResolvedTrack(
     val streamUrl: String,
     val mimeType: String?,
     val artworkUrl: String?,
+    val album: String = "",
+)
+
+data class YoutubeCredits(
+    val artist: String,
+    val album: String,
 )

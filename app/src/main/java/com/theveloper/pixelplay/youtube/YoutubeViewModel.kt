@@ -60,6 +60,12 @@ class YoutubeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            uiState.collect { state ->
+                val hits = state.results + state.shelves.flatMap { it.items }
+                if (hits.isNotEmpty()) musicStore.rememberHits(hits)
+            }
+        }
+        viewModelScope.launch {
             session.account.collect { account ->
                 if (_uiState.value.section == YoutubeSection.LIKED) {
                     loadLiked(refreshing = account.isSignedIn)

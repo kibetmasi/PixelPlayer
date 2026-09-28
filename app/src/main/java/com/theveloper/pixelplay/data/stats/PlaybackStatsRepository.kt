@@ -1149,3 +1149,11 @@ enum class StatsTimeRange(val displayName: String) {
     YEAR("Year to Date"),
     ALL("All Time")
 }
+
+/** Library songs win when an id exists in both lists. */
+internal fun mergeStatsSongs(library: List<Song>, streamed: List<Song>): List<Song> {
+    if (streamed.isEmpty()) return library
+    val known = HashSet<String>(library.size)
+    library.forEach { known += it.id }
+    return library + streamed.filter { it.id !in known && it.title.isNotBlank() }
+}

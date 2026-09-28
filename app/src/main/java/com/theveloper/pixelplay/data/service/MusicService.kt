@@ -176,6 +176,8 @@ class MusicService : MediaLibraryService() {
     @Inject
     lateinit var youtubeClient: com.theveloper.pixelplay.youtube.YoutubeClient
     @Inject
+    lateinit var youtubeMusicStore: com.theveloper.pixelplay.youtube.YoutubeMusicStore
+    @Inject
     @AppScope
     lateinit var appScope: CoroutineScope
 
@@ -382,6 +384,7 @@ class MusicService : MediaLibraryService() {
             return
         }
 
+        rememberYoutubePlayback(mediaItem)
         val positionMs = player.currentPosition.coerceAtLeast(0L)
         val durationMs = player.duration
         val fallbackDurationMs = mediaItem.mediaMetadata.extras
@@ -404,6 +407,50 @@ class MusicService : MediaLibraryService() {
                 fallbackDurationMs = fallbackDurationMs,
                 isPlaying = player.isPlaying
             )
+        }
+    }
+
+    private fun rememberYoutubePlayback(mediaItem: MediaItem?) {
+        val item = mediaItem ?: return
+        val songId = item.mediaId ?: return
+        if (!songId.startsWith("yt_")) return
+        val metadata = item.mediaMetadata
+        val title = metadata.title?.toString()?.trim().orEmpty()
+        if (title.isBlank()) return
+        val artist = metadata.artist?.toString().orEmpty()
+        val album = metadata.albumTitle?.toString().orEmpty()
+        val artworkUrl = metadata.artworkUri?.toString()
+        val videoId = metadata.extras
+            ?.getString(com.theveloper.pixelplay.youtube.YoutubeClient.EXTRA_WATCH_URL)
+            ?.let(com.theveloper.pixelplay.youtube.YoutubeClient::videoIdFromUrl)
+            .orEmpty()
+        youtubeMusicStore.rememberPlayback(
+            songId = songId,
+            title = title,
+            artist = artist,
+            album = album,
+            artworkUrl = artworkUrl,
+            videoId = videoId,
+        )
+        val missingCredit = artist.isBlank() || album.isBlank() ||
+            artist.equals("YouTube Music", ignoreCase = true) ||
+            album.equals("YouTube Music", ignoreCase = true)
+        if (missingCredit && videoId.length == 11 && youtubeMusicStore.claimCreditLookup(videoId)) {
+            appScope.launch(Dispatchers.IO) {
+                val credits = runCatching { youtubeClient.creditsFor(videoId) }.getOrNull()
+                if (credits == null) {
+                    youtubeMusicStore.releaseCreditLookup(videoId)
+                    return@launch
+                }
+                youtubeMusicStore.rememberPlayback(
+                    songId = songId,
+                    title = title,
+                    artist = credits.artist.ifBlank { artist },
+                    album = credits.album.ifBlank { album },
+                    artworkUrl = artworkUrl,
+                    videoId = videoId,
+                )
+            }
         }
     }
 
