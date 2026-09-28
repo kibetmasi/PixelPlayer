@@ -205,6 +205,15 @@ fun YoutubeScreen(
         }
         else -> uiState.results
     }
+    // Home shelves and recent plays are not in results, so selection actions
+    // have to resolve those tracks or the options button has nothing to open.
+    val selectableHits = if (browseSection == YoutubeSection.HOME && uiState.collectionTitle == null) {
+        (recent + uiState.shelves.flatMap { it.items })
+            .filter { it.isSelectableTrack() }
+            .distinctBy { it.url }
+    } else {
+        rows.filter { it.isSelectableTrack() }
+    }
     val listState = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
 
@@ -354,13 +363,12 @@ fun YoutubeScreen(
             viewModel.ensureLibraryPlaylists()
         }
     }
-    val selectedHits = remember(selectedUrls, rows) {
-        selectedUrls.mapNotNull { url ->
-            rows.firstOrNull { it.url == url && it.isSelectableTrack() }
-        }
+    val selectedHits = remember(selectedUrls, selectableHits) {
+        val byUrl = selectableHits.associateBy { it.url }
+        selectedUrls.mapNotNull { byUrl[it] }
     }
     val selectedSongs = remember(selectedHits) { selectedHits.map(viewModel::listSong) }
-    val canSelectTracks = rows.any { it.isSelectableTrack() }
+    val canSelectTracks = selectableHits.isNotEmpty()
     fun clearYoutubeSelection() {
         selecting = false
         selectedUrls = emptyList()
@@ -444,7 +452,7 @@ fun YoutubeScreen(
             SelectionActionRow(
                 selectedCount = selectedUrls.size,
                 onSelectAll = {
-                    selectedUrls = rows.filter { it.isSelectableTrack() }.map { it.url }
+                    selectedUrls = selectableHits.map { it.url }
                 },
                 onDeselect = { clearYoutubeSelection() },
                 onOptionsClick = {
@@ -762,8 +770,7 @@ fun YoutubeScreen(
                     libraryPlaylists.forEach { playlist ->
                         Surface(
                             onClick = {
-                                val chosen = rows.filter { it.url in selectedUrls }
-                                viewModel.addHitsToPlaylist(playlist, chosen)
+                                viewModel.addHitsToPlaylist(playlist, selectedHits)
                                 showAddToPlaylist = false
                                 selecting = false
                                 selectedUrls = emptyList()
@@ -799,8 +806,7 @@ fun YoutubeScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val chosen = rows.filter { it.url in selectedUrls }
-                        viewModel.createPlaylistAndAdd(newPlaylistName, chosen)
+                        viewModel.createPlaylistAndAdd(newPlaylistName, selectedHits)
                         newPlaylistName = ""
                         showCreatePlaylist = false
                         selecting = false
