@@ -492,31 +492,6 @@ fun YoutubeScreen(
                                 mixHits.take(8).map { placeholderSong(it) }.toImmutableList()
                             }
                             LazyColumn(contentPadding = contentPadding) {
-                                if (recent.isNotEmpty()) {
-                                    item(key = "recent") {
-                                        Text(
-                                            text = stringResource(R.string.youtube_recent_title),
-                                            modifier = Modifier.padding(bottom = 8.dp, top = 4.dp),
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontFamily = GoogleSansRounded,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                            items(recent, key = { "recent-${it.url}" }) { hit ->
-                                                YoutubeTile(
-                                                    hit = hit,
-                                                    modifier = Modifier.width(168.dp),
-                                                    isCurrent = currentSongId == YoutubeClient.songIdForUrl(hit.url),
-                                                    isPlaying = isPlaying,
-                                                    selecting = selecting,
-                                                    selected = hit.url in selectedUrls,
-                                                    onClick = { onSongClick(hit, false) },
-                                                    onLongPress = { onSongLongPress(hit) },
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
                                 if (mixHits.isNotEmpty()) {
                                 item(key = "your_mix") {
                                     YourMixHeader(
@@ -541,6 +516,31 @@ fun YoutubeScreen(
                                         )
                                     }
                                 }
+                                }
+                                if (recent.isNotEmpty()) {
+                                    item(key = "recent") {
+                                        Text(
+                                            text = stringResource(R.string.youtube_recent_title),
+                                            modifier = Modifier.padding(bottom = 8.dp, top = 12.dp),
+                                            style = MaterialTheme.typography.titleLarge,
+                                            fontFamily = GoogleSansRounded,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            items(recent, key = { "recent-${it.url}" }) { hit ->
+                                                YoutubeTile(
+                                                    hit = hit,
+                                                    modifier = Modifier.width(168.dp),
+                                                    isCurrent = currentSongId == YoutubeClient.songIdForUrl(hit.url),
+                                                    isPlaying = isPlaying,
+                                                    selecting = selecting,
+                                                    selected = hit.url in selectedUrls,
+                                                    onClick = { onSongClick(hit, false) },
+                                                    onLongPress = { onSongLongPress(hit) },
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                                 items(uiState.shelves, key = { it.id }) { shelf ->
                                     Text(
