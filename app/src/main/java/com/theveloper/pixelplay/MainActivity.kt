@@ -149,6 +149,7 @@ import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
 import com.theveloper.pixelplay.utils.CrashHandler
 import com.theveloper.pixelplay.utils.AppLocaleManager
 import com.theveloper.pixelplay.utils.LogUtils
+import com.theveloper.pixelplay.utils.PackageInstallAccess
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
@@ -501,8 +502,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun canRequestPackageInstallsSafely(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
-        return runCatching { packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+        return PackageInstallAccess.canRequestInstalls {
+            packageManager.canRequestPackageInstalls()
+        }
     }
 
     private fun openUnknownSourcesSettings(): Boolean {
