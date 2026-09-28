@@ -176,6 +176,8 @@ class MusicService : MediaLibraryService() {
     @Inject
     lateinit var youtubeClient: com.theveloper.pixelplay.youtube.YoutubeClient
     @Inject
+    lateinit var youtubeMusicStore: com.theveloper.pixelplay.youtube.YoutubeMusicStore
+    @Inject
     @AppScope
     lateinit var appScope: CoroutineScope
 
@@ -382,6 +384,7 @@ class MusicService : MediaLibraryService() {
             return
         }
 
+        rememberYoutubePlayback(mediaItem)
         val positionMs = player.currentPosition.coerceAtLeast(0L)
         val durationMs = player.duration
         val fallbackDurationMs = mediaItem.mediaMetadata.extras
@@ -405,6 +408,22 @@ class MusicService : MediaLibraryService() {
                 isPlaying = player.isPlaying
             )
         }
+    }
+
+    private fun rememberYoutubePlayback(mediaItem: MediaItem?) {
+        val item = mediaItem ?: return
+        val songId = item.mediaId ?: return
+        if (!songId.startsWith("yt_")) return
+        val metadata = item.mediaMetadata
+        val title = metadata.title?.toString()?.trim().orEmpty()
+        if (title.isBlank()) return
+        youtubeMusicStore.rememberPlayback(
+            songId = songId,
+            title = title,
+            artist = metadata.artist?.toString().orEmpty(),
+            album = metadata.albumTitle?.toString().orEmpty(),
+            artworkUrl = metadata.artworkUri?.toString(),
+        )
     }
 
     override fun onCreate() {

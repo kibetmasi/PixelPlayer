@@ -7,6 +7,8 @@ import com.theveloper.pixelplay.data.repository.MusicRepository
 import com.theveloper.pixelplay.data.stats.PlaybackStatsRepository
 import com.theveloper.pixelplay.data.stats.PlaybackStatsRepository.PlaybackStatsSummary
 import com.theveloper.pixelplay.data.stats.StatsTimeRange
+import com.theveloper.pixelplay.data.stats.mergeStatsSongs
+import com.theveloper.pixelplay.youtube.YoutubeMusicStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +25,8 @@ import timber.log.Timber
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val playbackStatsRepository: PlaybackStatsRepository,
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val youtubeMusicStore: YoutubeMusicStore,
 ) : ViewModel() {
 
     data class StatsUiState(
@@ -47,6 +50,7 @@ class StatsViewModel @Inject constructor(
     private var cachedSongs: List<Song>? = null
 
     init {
+        observeYoutubeCatalog()
         observeStatsRefreshFlow()
         refreshRange(
             range = StatsTimeRange.WEEK,
@@ -167,13 +171,30 @@ class StatsViewModel @Inject constructor(
         playbackStatsRepository.requestRefresh()
     }
 
-    private suspend fun loadSongs(): List<Song> {
-        cachedSongs?.let { existing ->
-            if (existing.isNotEmpty()) return existing
+    private fun observeYoutubeCatalog() {
+        viewModelScope.launch {
+            youtubeMusicStore.catalogVersion
+                .drop(1)
+                .collectLatest {
+                    val selectedRange = _uiState.value.selectedRange
+                    refreshRange(
+                        range = selectedRange,
+                        showLoading = false,
+                        updateWeeklyOverview = selectedRange == StatsTimeRange.WEEK
+                    )
+                    if (selectedRange != StatsTimeRange.WEEK) {
+                        refreshWeeklyOverview()
+                    }
+                    refreshHomeOverview()
+                }
         }
-        val songs = musicRepository.getAllSongsOnce()
-        cachedSongs = songs
-        return songs
+    }
+
+    private suspend fun loadSongs(): List<Song> {
+        val library = cachedSongs?.takeIf { it.isNotEmpty() } ?: musicRepository.getAllSongsOnce().also { loaded ->
+            if (loaded.isNotEmpty()) cachedSongs = loaded
+        }
+        return mergeStatsSongs(library, youtubeMusicStore.songsForStats())
     }
 
     private fun PlaybackStatsSummary.hasListeningActivity(): Boolean {

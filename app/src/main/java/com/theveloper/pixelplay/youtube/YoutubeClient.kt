@@ -815,7 +815,7 @@ class YoutubeClient @Inject constructor(
             artist = hit.artist,
             artistId = -1L,
             artists = emptyList(),
-            album = "YouTube Music",
+            album = hit.album.ifBlank { "YouTube Music" },
             albumId = -1L,
             albumArtist = hit.artist,
             path = hit.url,
