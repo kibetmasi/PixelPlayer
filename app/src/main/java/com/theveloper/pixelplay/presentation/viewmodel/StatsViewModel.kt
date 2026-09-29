@@ -10,6 +10,7 @@ import com.theveloper.pixelplay.data.stats.StatsTimeRange
 import com.theveloper.pixelplay.data.stats.mergeStatsSongs
 import com.theveloper.pixelplay.youtube.YoutubeClient
 import com.theveloper.pixelplay.youtube.YoutubeMusicStore
+import com.theveloper.pixelplay.youtube.YoutubeStatsCreditAi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ class StatsViewModel @Inject constructor(
     private val musicRepository: MusicRepository,
     private val youtubeMusicStore: YoutubeMusicStore,
     private val youtubeClient: YoutubeClient,
+    private val youtubeStatsCreditAi: YoutubeStatsCreditAi,
 ) : ViewModel() {
 
     data class StatsUiState(
@@ -174,6 +176,7 @@ class StatsViewModel @Inject constructor(
                     .filter { it.startsWith("yt_") }
                     .toSet()
                 youtubeClient.fillPlayedCredits(youtubeMusicStore, played)
+                youtubeStatsCreditAi.fill(youtubeMusicStore, played)
             }.onFailure { throwable ->
                 Timber.e(throwable, "Failed to load YouTube artist and album names")
             }
