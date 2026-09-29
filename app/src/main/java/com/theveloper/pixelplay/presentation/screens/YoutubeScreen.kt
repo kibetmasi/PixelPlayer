@@ -303,16 +303,23 @@ fun YoutubeScreen(
                             }
                     } else {
                         runCatching {
-                            val contextHits = YoutubePlaybackQueue.remainingTracks(hit, rows)
+                            val inPlaylist = uiState.collectionTitle != null
+                            val contextHits = if (inPlaylist) {
+                                YoutubePlaybackQueue.playlistTracks(hit, rows)
+                            } else {
+                                YoutubePlaybackQueue.remainingTracks(hit, rows)
+                            }
                             val queued = contextHits.map(viewModel::listSong)
                             val start = viewModel.resolvePlayable(hit)
-                            start to (listOf(start) + queued.drop(1))
+                            val songs = queued.map { song -> if (song.id == start.id) start else song }
+                            Triple(start, songs, inPlaylist)
                         }
-                            .onSuccess { (start, songs) ->
+                            .onSuccess { (start, songs, inPlaylist) ->
                                 playerViewModel.playSongs(
                                     songsToPlay = songs,
                                     startSong = start,
                                     queueName = uiState.collectionTitle ?: "YouTube Music",
+                                    keepPlayedSongs = inPlaylist,
                                 )
                                 viewModel.warmUpTracks(
                                     YoutubePlaybackQueue.remainingTracks(hit, rows),
