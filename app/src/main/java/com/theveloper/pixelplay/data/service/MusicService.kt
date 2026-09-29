@@ -210,7 +210,8 @@ class MusicService : MediaLibraryService() {
     private var countedPlayListener: Player.Listener? = null
     private var consecutivePlaybackErrorSkips = 0
     private val soundCloudRefreshAttempted = mutableSetOf<String>()
-    private val youtubeRefreshAttempted = mutableSetOf<String>()
+    private val youtubeRefreshAttempts = mutableMapOf<String, Int>()
+    private val youtubePrepareStarted = mutableSetOf<String>()
     private val alarmManager by lazy {
         getSystemService(Context.ALARM_SERVICE) as AlarmManager
     }
@@ -281,6 +282,7 @@ class MusicService : MediaLibraryService() {
         private const val MEDIA_SESSION_BUTTON_DEBOUNCE_MS = 250L
         private const val DEFERRED_SERVICE_STARTUP_WORK_DELAY_MS = 1_000L
         private const val MAX_PLAYBACK_ERROR_SKIPS = 8
+        private const val MAX_YOUTUBE_REFRESH_ATTEMPTS = 2
         private const val PAUSED_RESTORE_PREPARE_QUEUE_LIMIT = 50
         private val pendingMediaButtonForegroundStarts = AtomicInteger(0)
 
@@ -1406,7 +1408,7 @@ class MusicService : MediaLibraryService() {
                 (mediaSession?.player ?: engine.masterPlayer).currentMediaItem?.mediaId
                     ?.let {
                         soundCloudRefreshAttempted.remove(it)
-                        youtubeRefreshAttempted.remove(it)
+                        youtubeRefreshAttempts.remove(it)
                     }
             }
             if (playbackState == Player.STATE_ENDED) {
@@ -1437,6 +1439,7 @@ class MusicService : MediaLibraryService() {
             if (nextIndex != androidx.media3.common.C.INDEX_UNSET) {
                 runCatching { replayGainProcessor.prefetch(player.getMediaItemAt(nextIndex)) }
             }
+            prepareUpcomingYoutubeItem(player)
         }
 
         override fun onPositionDiscontinuity(
@@ -1518,6 +1521,7 @@ class MusicService : MediaLibraryService() {
             if (nextIndex != androidx.media3.common.C.INDEX_UNSET) {
                 runCatching { replayGainProcessor.prefetch(player.getMediaItemAt(nextIndex)) }
             }
+            prepareUpcomingYoutubeItem(player)
             // Optimization: Don't force-update widgets on every rapid skip.
             // Let the debounced updater handle it to prevent UI freezes.
             widgetUpdateManager.requestFullUpdate(false)
@@ -1574,7 +1578,9 @@ class MusicService : MediaLibraryService() {
                 return
             }
             val watchUrl = youtubeWatchUrl(currentItem)
-            if (currentItem != null && !watchUrl.isNullOrBlank() && youtubeRefreshAttempted.add(mediaId)) {
+            val attempts = youtubeRefreshAttempts[mediaId] ?: 0
+            if (currentItem != null && !watchUrl.isNullOrBlank() && attempts < MAX_YOUTUBE_REFRESH_ATTEMPTS) {
+                youtubeRefreshAttempts[mediaId] = attempts + 1
                 serviceScope.launch {
                     val refreshed = refreshYoutubeItem(currentItem, watchUrl)
                     withContext(Dispatchers.Main.immediate) {
@@ -2014,10 +2020,42 @@ class MusicService : MediaLibraryService() {
         }.awaitAll()
     }
 
+    private fun prepareUpcomingYoutubeItem(player: Player) {
+        val nextIndex = player.nextMediaItemIndex
+        if (nextIndex == C.INDEX_UNSET || nextIndex == player.currentMediaItemIndex) return
+        val next = runCatching { player.getMediaItemAt(nextIndex) }.getOrNull() ?: return
+        val watchUrl = youtubeWatchUrl(next) ?: return
+        val currentUri = next.localConfiguration?.uri?.toString().orEmpty()
+        if (isYoutubeStreamUrl(currentUri)) return
+        val mediaId = next.mediaId
+        if (!youtubePrepareStarted.add(mediaId)) return
+        serviceScope.launch {
+            val refreshed = refreshYoutubeItem(next, watchUrl)
+            withContext(Dispatchers.Main.immediate) {
+                val index = (0 until player.mediaItemCount).firstOrNull { itemIndex ->
+                    runCatching { player.getMediaItemAt(itemIndex).mediaId }.getOrNull() == mediaId
+                } ?: return@withContext
+                if (index == player.currentMediaItemIndex) return@withContext
+                val existing = player.getMediaItemAt(index).localConfiguration?.uri
+                val updated = refreshed.localConfiguration?.uri
+                if (updated != null && updated != existing) {
+                    player.replaceMediaItem(index, refreshed)
+                }
+            }
+        }
+    }
+
+    private fun isYoutubeStreamUrl(uri: String): Boolean {
+        return uri.contains("googlevideo.com") || uri.contains("videoplayback")
+    }
+
     private suspend fun refreshYoutubeItem(item: MediaItem, watchUrl: String): MediaItem =
         withContext(Dispatchers.IO) {
-            val streamUrl = runCatching { youtubeClient.resolveTrack(watchUrl).streamUrl }.getOrNull()
-            if (streamUrl.isNullOrBlank()) return@withContext item
+            val currentUri = item.localConfiguration?.uri?.toString()
+            val streamUrl = runCatching {
+                youtubeClient.resolveTrack(watchUrl, avoidStreamUrl = currentUri).streamUrl
+            }.getOrNull()
+            if (streamUrl.isNullOrBlank() || streamUrl == currentUri) return@withContext item
             val refreshed = item.buildUpon().setUri(streamUrl).build()
             MediaItemBuilder.withYoutubeWatchUrl(refreshed)
         }

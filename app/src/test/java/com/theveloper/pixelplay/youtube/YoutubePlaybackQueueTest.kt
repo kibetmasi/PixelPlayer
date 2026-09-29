@@ -39,6 +39,29 @@ class YoutubePlaybackQueueTest {
     }
 
     @Test
+    fun playlistTracks_keepsSongsBeforeTheOneThatIsPlaying() {
+        val tracks = listOf(
+            track("a", "One"),
+            track("b", "Two"),
+            track("c", "Three"),
+        )
+
+        val playlist = YoutubePlaybackQueue.playlistTracks(tracks[1], tracks)
+
+        assertThat(playlist.map { it.title }).containsExactly("One", "Two", "Three").inOrder()
+    }
+
+    @Test
+    fun playlistTracks_keepsTheTappedSongWhenItIsNotOnThePage() {
+        val playlist = YoutubePlaybackQueue.playlistTracks(
+            start = track("z", "Other"),
+            source = listOf(track("a", "One")),
+        )
+
+        assertThat(playlist.map { it.title }).containsExactly("Other")
+    }
+
+    @Test
     fun remainingTracks_usesOnlyTheTappedSongWhenItIsNotOnThePage() {
         val remaining = YoutubePlaybackQueue.remainingTracks(
             start = track("z", "Other"),

@@ -63,6 +63,7 @@ import com.theveloper.pixelplay.data.navidrome.NavidromeStreamProxy
 import com.theveloper.pixelplay.data.qqmusic.QqMusicStreamProxy
 import androidx.core.net.toUri
 import com.theveloper.pixelplay.data.diagnostics.AdvancedPerformanceDiagnostics
+import com.theveloper.pixelplay.youtube.YoutubeDownloader
 
 data class ActiveDecoderInfo(
     val name: String,
@@ -1091,15 +1092,16 @@ class DualPlayerEngine @Inject constructor(
             override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
                 val uri = dataSpec.uri
                 val scheme = uri.scheme
+                val withAgent = youtubePlaybackSpec(dataSpec)
                 if (scheme in CLOUD_PROXY_SCHEMES) {
                     val originalUri = uri.toString()
                     val resolved = resolvedUriCache.get(originalUri)
                     if (resolved != null) {
-                        return dataSpec.buildUpon().setUri(resolved).build()
+                        return withAgent.buildUpon().setUri(resolved).build()
                     }
                     Timber.tag("DualPlayerEngine").d("resolveDataSpec: Cache MISS for %s — using original URI", scheme)
                 }
-                return dataSpec
+                return withAgent
             }
         }
         
@@ -1267,6 +1269,15 @@ class DualPlayerEngine @Inject constructor(
         }
         if (!gdriveStreamProxy.ensureReady(5_000L)) return@withContext null
         gdriveStreamProxy.resolveGDriveUri(uriString)?.toUri()
+    }
+
+    private fun youtubePlaybackSpec(dataSpec: DataSpec): DataSpec {
+        val host = dataSpec.uri.host.orEmpty()
+        val youtube = host.contains("googlevideo.com") || host.endsWith("youtube.com")
+        if (!youtube) return dataSpec
+        val headers = HashMap(dataSpec.httpRequestHeaders)
+        headers["User-Agent"] = YoutubeDownloader.USER_AGENT
+        return dataSpec.buildUpon().setHttpRequestHeaders(headers).build()
     }
 
     suspend fun resolveMediaItem(mediaItem: MediaItem): MediaItem {

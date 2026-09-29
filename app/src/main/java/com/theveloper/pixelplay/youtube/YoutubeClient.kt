@@ -897,11 +897,33 @@ class YoutubeClient @Inject constructor(
         }
     }
 
-    fun resolveTrack(watchUrl: String): YoutubeResolvedTrack {
+    fun resolveTrack(watchUrl: String, avoidStreamUrl: String? = null): YoutubeResolvedTrack {
         applySession()
         val key = watchUrl.trim()
-        cachedTrack(key)?.let { return it }
+        val avoided = avoidStreamUrl?.trim().orEmpty()
+        cachedTrack(key)?.takeIf { it.streamUrl != avoided }?.let { return it }
 
+        val extracted = runCatching { extractResolved(key) }.getOrNull()
+            ?.takeIf { it.streamUrl.isNotBlank() && it.streamUrl != avoided }
+        if (extracted != null) {
+            resolveCache[key] = CachedResolve(extracted, System.currentTimeMillis())
+            return extracted
+        }
+
+        val videoId = videoIdFromUrl(key)
+        val fallback = if (videoId.length == 11) {
+            runCatching { audioFromPlayerClients(videoId, avoided) }.getOrNull()
+        } else {
+            null
+        }
+        if (fallback != null) {
+            resolveCache[key] = CachedResolve(fallback, System.currentTimeMillis())
+            return fallback
+        }
+        throw IllegalStateException("No playable audio stream for this track.")
+    }
+
+    private fun extractResolved(key: String): YoutubeResolvedTrack {
         val info = StreamInfo.getInfo(youtube(), key)
         val stream = pickBestAudioStream(info.audioStreams)
             ?: throw IllegalStateException("No playable audio stream for this track.")
@@ -911,7 +933,7 @@ class YoutubeClient @Inject constructor(
         } else {
             YoutubeCredits("", "")
         }
-        val resolved = YoutubeResolvedTrack(
+        return YoutubeResolvedTrack(
             watchUrl = info.url.orEmpty().ifBlank { key },
             title = info.name.orEmpty().ifBlank { "Unknown title" },
             artist = credits.artist.ifBlank {
@@ -923,8 +945,139 @@ class YoutubeClient @Inject constructor(
             artworkUrl = fullBleedArtwork(info.thumbnails.maxByOrNull { it.height }?.url),
             album = credits.album,
         )
-        resolveCache[key] = CachedResolve(resolved, System.currentTimeMillis())
-        return resolved
+    }
+
+    /**
+     * NewPipe's web player has no audio file for some YouTube Music tracks
+     * (the link is SABR-only, or the catalog video is blocked on that client).
+     * Those are the songs a playlist skips. A music or embedded player response
+     * still carries a direct audio URL for them.
+     */
+    private fun audioFromPlayerClients(videoId: String, avoidUrl: String): YoutubeResolvedTrack? {
+        val responses = listOf(
+            runCatching { musicPlayer(videoId) },
+            runCatching { embeddedPlayer(videoId) },
+            runCatching { androidVrPlayer(videoId) },
+        )
+        for (response in responses) {
+            val root = response.getOrNull() ?: continue
+            val status = root.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
+            if (status.isNotEmpty() && status != "OK") continue
+            val picked = pickPlayableAudio(audioCandidates(root), avoidUrl.ifBlank { null }) ?: continue
+            val details = root.optJSONObject("videoDetails")
+            val title = details?.optString("title").orEmpty().ifBlank { "Unknown title" }
+            val author = details?.optString("author").orEmpty().removeSuffix(" - Topic").trim()
+            val length = details?.optString("lengthSeconds")?.toLongOrNull() ?: 0L
+            val thumb = details?.optJSONObject("thumbnail")
+                ?.optJSONArray("thumbnails")
+                ?.let { thumbs ->
+                    (0 until thumbs.length())
+                        .mapNotNull { thumbs.optJSONObject(it)?.optString("url") }
+                        .lastOrNull { it.isNotBlank() }
+                }
+            return YoutubeResolvedTrack(
+                watchUrl = "https://music.youtube.com/watch?v=$videoId",
+                title = title,
+                artist = author,
+                durationMs = length.coerceAtLeast(0L) * 1000L,
+                streamUrl = picked.url,
+                mimeType = picked.mimeType.substringBefore(';').trim().ifBlank { null },
+                artworkUrl = fullBleedArtwork(thumb),
+            )
+        }
+        return null
+    }
+
+    private fun musicPlayer(videoId: String): JSONObject {
+        val body = JSONObject()
+            .put("context", JSONObject(musicContext()))
+            .put("videoId", videoId)
+            .put("contentCheckOk", true)
+            .put("racyCheckOk", true)
+        return musicPost("player", body.toString())
+    }
+
+    private fun embeddedPlayer(videoId: String): JSONObject = innertubePlayer(
+        videoId = videoId,
+        clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+        clientVersion = "2.0",
+        clientId = "85",
+        userAgent = MUSIC_USER_AGENT,
+    )
+
+    private fun androidVrPlayer(videoId: String): JSONObject = innertubePlayer(
+        videoId = videoId,
+        clientName = "ANDROID_VR",
+        clientVersion = "1.65.10",
+        clientId = "28",
+        userAgent = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12; eureka-user Build/SQ3A.220605.009.A1) gzip",
+        extraClient = JSONObject()
+            .put("deviceMake", "Oculus")
+            .put("deviceModel", "Quest 3")
+            .put("androidSdkVersion", 32)
+            .put("osName", "Android")
+            .put("osVersion", "12"),
+    )
+
+    private fun innertubePlayer(
+        videoId: String,
+        clientName: String,
+        clientVersion: String,
+        clientId: String,
+        userAgent: String,
+        extraClient: JSONObject? = null,
+    ): JSONObject {
+        val client = JSONObject()
+            .put("clientName", clientName)
+            .put("clientVersion", clientVersion)
+            .put("hl", "en")
+            .put("gl", "US")
+        extraClient?.keys()?.let { keys ->
+            while (keys.hasNext()) {
+                val name = keys.next()
+                client.put(name, extraClient.get(name))
+            }
+        }
+        val body = JSONObject()
+            .put("context", JSONObject().put("client", client))
+            .put("videoId", videoId)
+            .put("contentCheckOk", true)
+            .put("racyCheckOk", true)
+        val json = downloader.postJson(
+            url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+            json = body.toString(),
+            origin = "https://www.youtube.com",
+            clientName = clientId,
+            clientVersion = clientVersion,
+            userAgent = userAgent,
+        )
+        return JSONObject(json)
+    }
+
+    private fun audioCandidates(root: JSONObject): List<YoutubeAudioCandidate> {
+        val streaming = root.optJSONObject("streamingData") ?: return emptyList()
+        return buildList {
+            addAll(candidatesFrom(streaming.optJSONArray("adaptiveFormats")))
+            addAll(candidatesFrom(streaming.optJSONArray("formats")))
+        }
+    }
+
+    private fun candidatesFrom(formats: JSONArray?): List<YoutubeAudioCandidate> {
+        if (formats == null) return emptyList()
+        return buildList {
+            for (index in 0 until formats.length()) {
+                val format = formats.optJSONObject(index) ?: continue
+                val url = format.optString("url")
+                if (!url.startsWith("http")) continue
+                add(
+                    YoutubeAudioCandidate(
+                        url = url,
+                        mimeType = format.optString("mimeType"),
+                        bitrate = format.optInt("bitrate"),
+                    ),
+                )
+            }
+        }
     }
 
     private fun cachedTrack(key: String): YoutubeResolvedTrack? = resolveCache[key]
@@ -1187,21 +1340,18 @@ class YoutubeClient @Inject constructor(
 
     private fun pickBestAudioStream(streams: List<AudioStream>): AudioStream? {
         if (streams.isEmpty()) return null
-        val progressive = streams.filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
-        if (progressive.isNotEmpty()) {
-            return progressive.maxWithOrNull(
-                compareBy<AudioStream> { it.averageBitrate }.thenBy { it.bitrate },
-            )
-        }
-        val hls = streams.filter {
-            it.deliveryMethod == DeliveryMethod.HLS && !it.content.contains("encrypted")
-        }
-        if (hls.isNotEmpty()) {
-            return hls.maxWithOrNull(
-                compareBy<AudioStream> { it.averageBitrate }.thenBy { it.bitrate },
-            )
-        }
-        return streams.firstOrNull { !it.content.contains("encrypted") }
+        val picked = pickPlayableAudio(
+            streams.map { stream ->
+                val mime = stream.format?.mimeType
+                    ?: if (stream.deliveryMethod == DeliveryMethod.HLS) "application/vnd.apple.mpegurl" else ""
+                YoutubeAudioCandidate(
+                    url = stream.content.orEmpty(),
+                    mimeType = mime,
+                    bitrate = stream.averageBitrate.takeIf { it > 0 } ?: stream.bitrate,
+                )
+            },
+        ) ?: return null
+        return streams.firstOrNull { it.content == picked.url }
     }
 
     companion object {

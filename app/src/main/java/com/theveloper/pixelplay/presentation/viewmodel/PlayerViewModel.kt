@@ -2214,8 +2214,19 @@ class PlayerViewModel @Inject constructor(
     }
 
     // rebuildPlayerQueue functionality moved to PlaybackStateHolder (simplified)
-    fun playSongs(songsToPlay: List<Song>, startSong: Song, queueName: String = "None", playlistId: String? = null) =
-        playbackDispatchStateHolder.playSongs(songsToPlay, startSong, queueName, playlistId)
+    fun playSongs(
+        songsToPlay: List<Song>,
+        startSong: Song,
+        queueName: String = "None",
+        playlistId: String? = null,
+        keepPlayedSongs: Boolean = false,
+    ) = playbackDispatchStateHolder.playSongs(
+        songsToPlay,
+        startSong,
+        queueName,
+        playlistId,
+        keepPlayedSongs,
+    )
 
     fun playSongsShuffled(
         songsToPlay: List<Song>,
