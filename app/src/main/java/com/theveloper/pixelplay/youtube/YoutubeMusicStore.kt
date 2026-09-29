@@ -107,12 +107,54 @@ class YoutubeMusicStore @Inject constructor(
                     album = cleanAlbum(album),
                     artworkUrl = artworkUrl,
                     videoId = videoId.trim(),
+                    aiAsked = false,
                 )
             )
             if (updated) persistCatalog()
             updated
         }
         if (changed) _catalogVersion.value += 1
+    }
+
+    fun creditGapsForAi(playedSongIds: Set<String>, limit: Int): List<CatalogCreditGap> {
+        if (playedSongIds.isEmpty() || limit <= 0) return emptyList()
+        return synchronized(catalog) {
+            val tracks = catalog.values.filter { track ->
+                track.songId in playedSongIds &&
+                    !track.aiAsked &&
+                    track.title.isNotBlank() &&
+                    (track.artist.isBlank() || track.album.isBlank())
+            }.take(limit)
+            if (tracks.isEmpty()) return@synchronized emptyList()
+            tracks.forEach { track ->
+                catalog[track.songId] = track.copy(aiAsked = true)
+            }
+            persistCatalog()
+            tracks.map { track ->
+                CatalogCreditGap(
+                    songId = track.songId,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    artworkUrl = track.artworkUrl,
+                    videoId = track.videoId,
+                )
+            }
+        }
+    }
+
+    fun releaseAiCreditGaps(songIds: Set<String>) {
+        if (songIds.isEmpty()) return
+        synchronized(catalog) {
+            var changed = false
+            songIds.forEach { songId ->
+                val track = catalog[songId] ?: return@forEach
+                if (!track.aiAsked) return@forEach
+                catalog[songId] = track.copy(aiAsked = false)
+                changed = true
+            }
+            if (changed) persistCatalog()
+        }
     }
 
     fun creditGaps(playedSongIds: Set<String>, limit: Int): List<CatalogCreditGap> {
@@ -244,6 +286,7 @@ class YoutubeMusicStore @Inject constructor(
                     .put("album", track.album)
                     .put("artworkUrl", track.artworkUrl ?: "")
                     .put("videoId", track.videoId)
+                    .put("aiAsked", track.aiAsked)
             )
         }
         prefs.edit().putString(KEY_CATALOG, array.toString()).apply()
@@ -267,6 +310,7 @@ class YoutubeMusicStore @Inject constructor(
                             album = cleanAlbum(item.optString("album")),
                             artworkUrl = item.optString("artworkUrl").ifBlank { null },
                             videoId = item.optString("videoId"),
+                            aiAsked = item.optBoolean("aiAsked"),
                         )
                     )
                 }
@@ -309,6 +353,7 @@ class YoutubeMusicStore @Inject constructor(
         val album: String,
         val artworkUrl: String?,
         val videoId: String = "",
+        val aiAsked: Boolean = false,
     ) {
         fun merge(incoming: CatalogTrack): CatalogTrack = copy(
             title = incoming.title.ifBlank { title },
@@ -316,6 +361,7 @@ class YoutubeMusicStore @Inject constructor(
             album = incoming.album.ifBlank { album },
             artworkUrl = incoming.artworkUrl ?: artworkUrl,
             videoId = incoming.videoId.ifBlank { videoId },
+            aiAsked = aiAsked || incoming.aiAsked,
         )
 
         fun toSong(): Song = Song(
